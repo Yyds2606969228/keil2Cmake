@@ -1,5 +1,7 @@
 # Keil2Cmake
 
+**中文** | [English](README_EN.md)
+
 Keil uVision 到 CMake 转换工具 (v3.0)，支持三大 ARM 工具链、CMake Presets、国际化输出。
 
 ## ✨ 功能特性
@@ -175,4 +177,5 @@ pyinstaller -F --name Keil2Cmake \
 
 ---
 
-⭐ **[GitHub](https://github.com/yourusername/Keil2Cmake)** | 📖 **[文档](https://gitee.com/yyds6589/keil2cmake)** | 💬 **[问题反馈](https://github.com/yourusername/Keil2Cmake/issues)**
+⭐ **[GitHub](https://github.com/Yyds2606969228/keil2Cmake)**
+⭐ **[Gitee](https://gitee.com/yyds6589/keil2cmake)**
