@@ -4,7 +4,7 @@ import os
 
 from keil.config import get_toolchain_path, get_include_path, get_sysroot_path, get_armgcc_extra_include
 from keil.device import detect_cpu_architecture, get_arm_arch_for_clang, get_compiler_cpu_name
-from keil2cmake_common import ensure_dir, norm_path
+from keil2cmake_common import ensure_dir, norm_path, remove_bom_from_file
 from i18n import t
 
 
@@ -204,3 +204,13 @@ set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
     with open(os.path.join(internal_dir, 'toolchain.cmake'), 'w', encoding='utf-8-sig') as f:
         f.write(content)
+    
+    # Check and clean BOM from user's linker script if provided
+    linker_script = project_data.get('linker_script')
+    if linker_script:
+        uvprojx_dir = project_data.get('uvprojx_dir', '')
+        script_path = linker_script if os.path.isabs(linker_script) else os.path.join(uvprojx_dir, linker_script)
+        
+        if os.path.exists(script_path):
+            if remove_bom_from_file(script_path):
+                print(f"  ⚠️  {t('gen.toolchain.bom_removed')}: {os.path.basename(script_path)}")

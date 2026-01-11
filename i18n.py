@@ -70,6 +70,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "gen.toolchain.header.title": "# Keil2Cmake 自动生成的工具链文件",
         "gen.toolchain.select_compiler": "# 选择编译器（通常由 CMakePresets.json 提供）",
         "gen.toolchain.linker_scripts": "# 默认链接器脚本位于 cmake/internal（可通过 K2C_LINKER_SCRIPT_* 覆盖）",
+        "gen.toolchain.bom_removed": "已从链接脚本中移除 BOM 字符",
     },
     "en": {
         # CLI
@@ -132,6 +133,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "gen.toolchain.header.title": "# Auto-generated toolchain by Keil2Cmake",
         "gen.toolchain.select_compiler": "# Select compiler (usually provided by CMakePresets.json)",
         "gen.toolchain.linker_scripts": "# Default linker scripts live in cmake/internal (can be overridden via K2C_LINKER_SCRIPT_*)",
+        "gen.toolchain.bom_removed": "Removed BOM from linker script",
     },
 }
 

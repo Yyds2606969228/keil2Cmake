@@ -40,3 +40,32 @@ def ensure_dir(path: str) -> None:
     if not path:
         return
     os.makedirs(path, exist_ok=True)
+
+
+def remove_bom_from_file(file_path: str) -> bool:
+    """Remove BOM (Byte Order Mark) from a file if present.
+    
+    Returns True if BOM was found and removed, False otherwise.
+    """
+    if not os.path.exists(file_path):
+        return False
+    
+    try:
+        # Try to read with utf-8-sig to detect and remove BOM
+        with open(file_path, 'r', encoding='utf-8-sig') as f:
+            content = f.read()
+        
+        # Check if original file had BOM by reading as binary
+        with open(file_path, 'rb') as f:
+            raw = f.read(3)
+            has_bom = raw.startswith(b'\xef\xbb\xbf')
+        
+        if has_bom:
+            # Rewrite without BOM
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            return True
+    except Exception:
+        pass
+    
+    return False

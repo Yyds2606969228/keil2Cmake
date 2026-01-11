@@ -163,6 +163,19 @@ pyinstaller -F --name Keil2Cmake \
 
 ## 📝 更新日志
 
+### v3.1 (2026-01)
+- 🐛 **修复 .clangd 配置问题**
+  - ✅ 添加 `CompilationDatabase` 路径配置，解决 compile_commands.json 未识别问题
+  - ✅ 添加 `-D__NO_EMBEDDED_ASM` 宏定义，解决 `__disable_irq` 等内置函数未声明问题
+  - ✅ 添加 `-fms-extensions` 选项，支持 `__declspec` 属性
+  - ✅ 将 `-D__CC_ARM` 移至 Remove 列表，避免 ARMCC 内联汇编解析错误
+  - ✅ 修正 `StandardLibrary: false`（原为错误的字符串值）
+  - ✅ 移除不支持的 `WorkspaceSymbol` 配置块
+- 🐛 **修复 Scatter File BOM 问题**
+  - ✅ 自动检测并移除链接脚本文件中的 BOM 字符（`\ufeff`）
+  - ✅ 避免 armlink 因 BOM 字符导致的链接失败
+  - ✅ 添加 BOM 清理提示信息
+
 ### v3.0 (2026-01)
 - ✨ CMake Presets + 精简文件结构
 - ✨ 中英文国际化 + 智能编译器识别
