@@ -5,6 +5,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 project({{ project_name }} LANGUAGES C ASM)
 
 include(${CMAKE_SOURCE_DIR}/cmake/user/keil2cmake_user.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/internal/k2c_debug.cmake)
 
 message(STATUS "K2C compiler: armgcc")
 message(STATUS "K2C optimize: ${K2C_OPTIMIZE_LEVEL}")

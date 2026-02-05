@@ -1,0 +1,20 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug (OpenOCD)",
+      "type": "cortex-debug",
+      "request": "launch",
+      "servertype": "openocd",
+      "cwd": "${workspaceFolder}",
+      "executable": "@K2C_DEBUG_EXECUTABLE@",
+      "gdbPath": "@K2C_GDB_PATH@",
+      "serverpath": "@K2C_OPENOCD_PATH@",
+@K2C_OPENOCD_SEARCHDIR_JSON@
+      "configFiles": [
+        "${workspaceFolder}/cmake/user/openocd.cfg"
+      ],
+      "runToEntryPoint": "main"
+    }
+  ]
+}

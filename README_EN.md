@@ -21,6 +21,7 @@ ARMGCC_PATH = D:/Toolchains/arm-gcc/bin
 CMAKE_PATH = C:/Program Files/CMake/bin/cmake.exe
 NINJA_PATH = D:/Tools/ninja/ninja.exe
 CHECKCPP_PATH = D:/Tools/cppcheck/cppcheck.exe
+OPENOCD_PATH = D:/Tools/openocd/bin/openocd.exe
 
 [GENERAL]
 LANGUAGE = en
@@ -51,6 +52,13 @@ project_root/
     │   └── keil2cmake_from_sct.ld
     └── user/
         └── keil2cmake_user.cmake
+
+Generated after `cmake --preset keil2cmake`:
+```
+.vscode/launch.json
+.vscode/tasks.json
+cmake/user/openocd.cfg
+```
 ```
 
 ## Notes
@@ -61,6 +69,7 @@ project_root/
 - ASM compatibility: `.s/.asm` sources are included; ARMASM must be rewritten to GCC syntax. You can set `K2C_GCC_STARTUP` to point to a GCC startup file.
 - Linker conversion: if a Keil `.sct` is provided, `cmake/internal/keil2cmake_from_sct.ld` is generated and used as the default GCC linker script (strict template conversion; please verify memory layout. If parsing fails, it falls back to the default script).
 - checkcpp args: configure `K2C_CHECKCPP_ENABLE` or switch-style `K2C_CHECKCPP_ENABLE_*` (ON/OFF) to build `--enable`, plus `K2C_CHECKCPP_JOBS` / `K2C_CHECKCPP_EXCLUDES` / `K2C_CHECKCPP_INCONCLUSIVE` in `cmake/user/keil2cmake_user.cmake`.
+- OpenOCD debug: generated after `cmake --preset keil2cmake` (`.vscode/launch.json` for cortex-debug, `.vscode/tasks.json` for download). Edit `cmake/user/openocd.cfg` to set probe/target. Manually select the probe in `CMakePresets.json` via `K2C_DEBUG_PROBE` (`daplink`/`jlink`/`stlink`); the device name is used to auto-fill a default `K2C_OPENOCD_TARGET` when possible; `OPENOCD_PATH` comes from `path.cfg`.
 
 ---
 

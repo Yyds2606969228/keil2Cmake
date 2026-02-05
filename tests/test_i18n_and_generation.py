@@ -41,6 +41,7 @@ class TestConfigPaths(unittest.TestCase):
             self.assertEqual(cfg['PATHS'].get('CMAKE_PATH', ''), 'cmake')
             self.assertEqual(cfg['PATHS'].get('NINJA_PATH', ''), 'ninja')
             self.assertEqual(cfg['PATHS'].get('CHECKCPP_PATH', ''), 'checkcpp')
+            self.assertEqual(cfg['PATHS'].get('OPENOCD_PATH', ''), 'openocd')
 
 
 class TestUvprojxAndGeneration(unittest.TestCase):
@@ -143,6 +144,7 @@ LR_IROM1 __ROM_BASE __ROM_SIZE
             from keil2cmake.project_gen import generate_cmake_structure
             from keil2cmake.compiler.toolchains import generate_toolchains
             from keil2cmake.compiler.presets import generate_cmake_presets
+            from keil2cmake.compiler.debug import generate_debug_templates
 
             set_language('en')
             data = parse_uvprojx(uvprojx_path)
@@ -153,7 +155,8 @@ LR_IROM1 __ROM_BASE __ROM_SIZE
             os.makedirs(project_root, exist_ok=True)
             generate_cmake_structure(data, project_root)
             generate_toolchains(data, project_root)
-            generate_cmake_presets(project_root)
+            generate_cmake_presets(project_root, data)
+            generate_debug_templates(project_root)
 
             gen_path = os.path.join(project_root, 'cmake', 'user', 'keil2cmake_user.cmake')
             self.assertTrue(os.path.exists(gen_path))
@@ -171,12 +174,18 @@ LR_IROM1 __ROM_BASE __ROM_SIZE
             self.assertIn('set(K2C_CHECKCPP_ENABLE_ALL', gen)
             self.assertIn('set(K2C_CHECKCPP_ENABLE_WARNING', gen)
             self.assertIn('set(K2C_CHECKCPP_INCONCLUSIVE', gen)
+            self.assertIn('set(K2C_OPENOCD_PATH', gen)
+            self.assertIn('set(K2C_DEBUG_PROBE', gen)
 
             presets_path = os.path.join(project_root, 'CMakePresets.json')
             with open(presets_path, 'r', encoding='utf-8') as f:
                 presets = f.read()
             self.assertIn('"name": "build"', presets)
             self.assertIn('"name": "check"', presets)
+            self.assertIn('K2C_OPENOCD_PATH', presets)
+            self.assertIn('K2C_DEBUG_PROBE', presets)
+            self.assertIn('"K2C_DEBUG_PROBE": ""', presets)
+            self.assertIn('target/stm32f1x.cfg', presets)
 
             # Ensure we keep ASM optimization isolation in top-level CMakeLists.
             cmakelists = os.path.join(project_root, 'CMakeLists.txt')
@@ -187,6 +196,20 @@ LR_IROM1 __ROM_BASE __ROM_SIZE
             self.assertIn('K2C_CHECKCPP_ENABLE', top)
             self.assertIn('K2C_CHECKCPP_JOBS', top)
             self.assertIn('K2C_CHECKCPP_EXCLUDES', top)
+            self.assertIn('k2c_debug.cmake', top)
+
+            launch_path = os.path.join(project_root, '.vscode', 'launch.json')
+            tasks_path = os.path.join(project_root, '.vscode', 'tasks.json')
+            ocd_cfg = os.path.join(project_root, 'cmake', 'user', 'openocd.cfg')
+            self.assertFalse(os.path.exists(launch_path))
+            self.assertFalse(os.path.exists(tasks_path))
+            self.assertFalse(os.path.exists(ocd_cfg))
+
+            debug_cmake = os.path.join(project_root, 'cmake', 'internal', 'k2c_debug.cmake')
+            self.assertTrue(os.path.exists(debug_cmake))
+            with open(debug_cmake, 'r', encoding='utf-8') as f:
+                debug_cmake_content = f.read()
+            self.assertIn('openocd.cfg.in', debug_cmake_content)
 
             # Scatter conversion should generate ld script and set default linker script.
             converted_ld = os.path.join(project_root, 'cmake', 'internal', 'keil2cmake_from_sct.ld')
@@ -286,6 +309,51 @@ LR_IROM1 ROM_BASE ROM_SIZE
             result = convert_scatter_to_ld(sct_path, out_path)
             self.assertFalse(result.ok)
 
+
+class TestDebugTemplates(unittest.TestCase):
+    def test_debug_template_files_exist(self) -> None:
+        root = ROOT / 'src' / 'keil2cmake' / 'templates'
+        self.assertTrue((root / 'k2c_debug.cmake.j2').exists())
+        self.assertTrue((root / 'openocd.cfg.in.j2').exists())
+        self.assertTrue((root / 'launch.json.in.j2').exists())
+        self.assertTrue((root / 'tasks.json.in.j2').exists())
+
+    def test_launch_template_contains_required_fields(self) -> None:
+        tpl = ROOT / 'src' / 'keil2cmake' / 'templates' / 'launch.json.in.j2'
+        content = tpl.read_text(encoding='utf-8')
+        self.assertIn('"servertype": "openocd"', content)
+        self.assertIn('"configFiles"', content)
+        self.assertIn('"serverpath"', content)
+        self.assertIn('"gdbPath"', content)
+        self.assertIn('"executable"', content)
+
+    def test_tasks_template_contains_program_command(self) -> None:
+        tpl = ROOT / 'src' / 'keil2cmake' / 'templates' / 'tasks.json.in.j2'
+        content = tpl.read_text(encoding='utf-8')
+        self.assertIn('"command": "@K2C_OPENOCD_PATH@"', content)
+        self.assertIn('"-f"', content)
+        self.assertIn('"-c"', content)
+        self.assertIn('"program @K2C_DEBUG_EXECUTABLE@ verify reset exit"', content)
+        self.assertIn('openocd.cfg', content)
+
+    def test_openocd_cfg_template_contains_sources(self) -> None:
+        tpl = ROOT / 'src' / 'keil2cmake' / 'templates' / 'openocd.cfg.in.j2'
+        content = tpl.read_text(encoding='utf-8')
+        self.assertIn('@K2C_OPENOCD_BOARD_LINE@', content)
+        self.assertIn('@K2C_OPENOCD_INTERFACE_LINE@', content)
+        self.assertIn('@K2C_OPENOCD_TARGET_LINE@', content)
+        self.assertIn('OpenOCD config', content)
+
+    def test_debug_cmake_probe_mapping(self) -> None:
+        tpl = ROOT / 'src' / 'keil2cmake' / 'templates' / 'k2c_debug.cmake.j2'
+        content = tpl.read_text(encoding='utf-8')
+        self.assertIn('daplink', content)
+        self.assertIn('jlink', content)
+        self.assertIn('stlink', content)
+        self.assertIn('interface/cmsis-dap.cfg', content)
+        self.assertIn('interface/jlink.cfg', content)
+        self.assertIn('interface/stlink.cfg', content)
+        self.assertIn('configure_file', content)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

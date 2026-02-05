@@ -5,7 +5,8 @@ import re
 
 from .common import ensure_dir, norm_path
 from .keil.device import detect_cpu_architecture
-from .keil.config import get_cmake_min_version
+from .keil.config import get_cmake_min_version, get_openocd_path
+from .compiler.debug import infer_openocd_target
 from .i18n import t
 from .template_engine import write_template
 
@@ -212,6 +213,8 @@ def generate_cmake_structure(project_data: dict, project_root: str) -> None:
                 'cpu_arch': cpu_arch,
                 'default_opt_level': project_data['opt_level'],
                 'use_newlib_nano_default': use_newlib_nano_default,
+                'openocd_path': norm_path(get_openocd_path()),
+                'openocd_target_default': infer_openocd_target(project_data.get('device', '')),
                 'asm_detected': 'ON' if asm_detected else 'OFF',
                 'asm_sources': asm_sources,
                 'gcc_startup': gcc_startup_rel,
@@ -251,15 +254,29 @@ def clean_generated(project_root: str) -> int:
             except OSError:
                 pass
 
+    vscode_dir = os.path.join(project_root, '.vscode')
+    for name in ('launch.json', 'tasks.json'):
+        path = os.path.join(vscode_dir, name)
+        if os.path.isfile(path):
+            try:
+                os.remove(path)
+                removed += 1
+            except OSError:
+                pass
+
     cmake_dir = os.path.join(project_root, 'cmake')
     internal_dir = os.path.join(cmake_dir, 'internal')
     user_dir = os.path.join(cmake_dir, 'user')
 
     known = [
         os.path.join(internal_dir, 'toolchain.cmake'),
+        os.path.join(internal_dir, 'k2c_debug.cmake'),
         os.path.join(internal_dir, 'keil2cmake_default.sct'),
         os.path.join(internal_dir, 'keil2cmake_default.ld'),
         os.path.join(internal_dir, 'keil2cmake_from_sct.ld'),
+        os.path.join(internal_dir, 'templates', 'openocd.cfg.in'),
+        os.path.join(internal_dir, 'templates', 'launch.json.in'),
+        os.path.join(internal_dir, 'templates', 'tasks.json.in'),
 
         # Legacy internal layout (older generator versions)
         os.path.join(internal_dir, 'armcc', 'toolchain.cmake'),
@@ -269,6 +286,7 @@ def clean_generated(project_root: str) -> int:
         os.path.join(internal_dir, 'common', 'keil2cmake_generated.cmake'),
 
         os.path.join(user_dir, 'keil2cmake_user.cmake'),
+        os.path.join(user_dir, 'openocd.cfg'),
 
         os.path.join(user_dir, 'common', 'keil2cmake_project.cmake'),
         os.path.join(user_dir, 'common', 'keil2cmake_user.cmake'),
@@ -310,6 +328,13 @@ def clean_generated(project_root: str) -> int:
                 os.rmdir(d)
         except OSError:
             pass
+
+    templates_dir = os.path.join(internal_dir, 'templates')
+    try:
+        if os.path.isdir(templates_dir) and not os.listdir(templates_dir):
+            os.rmdir(templates_dir)
+    except OSError:
+        pass
 
     if removed:
         print(t('clean.done', count=removed))

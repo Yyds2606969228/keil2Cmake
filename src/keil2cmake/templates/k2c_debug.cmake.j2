@@ -1,0 +1,107 @@
+set(_K2C_VSCODE_DIR "${CMAKE_SOURCE_DIR}/.vscode")
+set(_K2C_USER_DIR "${CMAKE_SOURCE_DIR}/cmake/user")
+set(_K2C_TPL_DIR "${CMAKE_SOURCE_DIR}/cmake/internal/templates")
+
+file(MAKE_DIRECTORY "${_K2C_VSCODE_DIR}")
+file(MAKE_DIRECTORY "${_K2C_USER_DIR}")
+
+if(NOT K2C_OPENOCD_PATH OR K2C_OPENOCD_PATH STREQUAL "")
+    set(K2C_OPENOCD_PATH "openocd")
+endif()
+
+if(NOT K2C_GDB_PATH OR K2C_GDB_PATH STREQUAL "")
+    if(DEFINED ARMGCC_BIN AND NOT ARMGCC_BIN STREQUAL "")
+        set(K2C_GDB_PATH "${ARMGCC_BIN}/arm-none-eabi-gdb.exe")
+    else()
+        set(K2C_GDB_PATH "arm-none-eabi-gdb")
+    endif()
+endif()
+
+set(_K2C_DEBUG_EXECUTABLE "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.elf")
+
+set(_K2C_OPENOCD_PATH_JSON "${K2C_OPENOCD_PATH}")
+string(REPLACE "\\" "/" _K2C_OPENOCD_PATH_JSON "${_K2C_OPENOCD_PATH_JSON}")
+set(_K2C_GDB_PATH_JSON "${K2C_GDB_PATH}")
+string(REPLACE "\\" "/" _K2C_GDB_PATH_JSON "${_K2C_GDB_PATH_JSON}")
+set(_K2C_DEBUG_EXECUTABLE_JSON "${_K2C_DEBUG_EXECUTABLE}")
+string(REPLACE "\\" "/" _K2C_DEBUG_EXECUTABLE_JSON "${_K2C_DEBUG_EXECUTABLE_JSON}")
+
+set(_K2C_DEBUG_PROBE "${K2C_DEBUG_PROBE}")
+if(NOT _K2C_DEBUG_PROBE STREQUAL "")
+    if(NOT _K2C_DEBUG_PROBE STREQUAL "stlink" AND NOT _K2C_DEBUG_PROBE STREQUAL "jlink" AND NOT _K2C_DEBUG_PROBE STREQUAL "daplink")
+        message(WARNING "Unsupported K2C_DEBUG_PROBE=${_K2C_DEBUG_PROBE}. Use daplink/jlink/stlink.")
+    endif()
+endif()
+
+set(_K2C_OPENOCD_INTERFACE "${K2C_OPENOCD_INTERFACE}")
+if(_K2C_OPENOCD_INTERFACE STREQUAL "")
+    if(_K2C_DEBUG_PROBE STREQUAL "stlink")
+        set(_K2C_OPENOCD_INTERFACE "interface/stlink.cfg")
+    elseif(_K2C_DEBUG_PROBE STREQUAL "jlink")
+        set(_K2C_OPENOCD_INTERFACE "interface/jlink.cfg")
+    elseif(_K2C_DEBUG_PROBE STREQUAL "daplink")
+        set(_K2C_OPENOCD_INTERFACE "interface/cmsis-dap.cfg")
+    endif()
+endif()
+
+set(_K2C_OPENOCD_TARGET "${K2C_OPENOCD_TARGET}")
+if(_K2C_OPENOCD_TARGET STREQUAL "" AND DEFINED K2C_OPENOCD_TARGET_DEFAULT)
+    set(_K2C_OPENOCD_TARGET "${K2C_OPENOCD_TARGET_DEFAULT}")
+endif()
+
+set(_K2C_OPENOCD_SEARCHDIR_JSON "")
+set(_K2C_OPENOCD_SCRIPTS_ARGS "")
+if(NOT K2C_OPENOCD_SCRIPTS STREQUAL "")
+    set(_K2C_SCRIPTS_JSON "${K2C_OPENOCD_SCRIPTS}")
+    string(REPLACE "\\" "/" _K2C_SCRIPTS_JSON "${_K2C_SCRIPTS_JSON}")
+    set(_K2C_OPENOCD_SEARCHDIR_JSON "      \"searchDir\": [\"${_K2C_SCRIPTS_JSON}\"],")
+    set(_K2C_OPENOCD_SCRIPTS_ARGS_LIST
+        "        \"-s\","
+        "        \"${_K2C_SCRIPTS_JSON}\","
+    )
+    string(JOIN "\n" _K2C_OPENOCD_SCRIPTS_ARGS ${_K2C_OPENOCD_SCRIPTS_ARGS_LIST})
+endif()
+
+set(K2C_OPENOCD_BOARD_LINE "")
+set(K2C_OPENOCD_INTERFACE_LINE "")
+set(K2C_OPENOCD_TARGET_LINE "")
+if(NOT K2C_OPENOCD_BOARD STREQUAL "")
+    set(K2C_OPENOCD_BOARD_LINE "source [find ${K2C_OPENOCD_BOARD}]")
+else()
+    if(NOT _K2C_OPENOCD_INTERFACE STREQUAL "")
+        set(K2C_OPENOCD_INTERFACE_LINE "source [find ${_K2C_OPENOCD_INTERFACE}]")
+    endif()
+    if(NOT _K2C_OPENOCD_TARGET STREQUAL "")
+        set(K2C_OPENOCD_TARGET_LINE "source [find ${_K2C_OPENOCD_TARGET}]")
+    endif()
+endif()
+
+set(K2C_OPENOCD_PATH "${_K2C_OPENOCD_PATH_JSON}")
+set(K2C_GDB_PATH "${_K2C_GDB_PATH_JSON}")
+set(K2C_DEBUG_EXECUTABLE "${_K2C_DEBUG_EXECUTABLE_JSON}")
+set(K2C_OPENOCD_SEARCHDIR_JSON "${_K2C_OPENOCD_SEARCHDIR_JSON}")
+set(K2C_OPENOCD_SCRIPTS_ARGS "${_K2C_OPENOCD_SCRIPTS_ARGS}")
+
+if(NOT EXISTS "${_K2C_USER_DIR}/openocd.cfg")
+    configure_file(
+        "${_K2C_TPL_DIR}/openocd.cfg.in"
+        "${_K2C_USER_DIR}/openocd.cfg"
+        @ONLY
+    )
+endif()
+
+if(NOT EXISTS "${_K2C_VSCODE_DIR}/launch.json")
+    configure_file(
+        "${_K2C_TPL_DIR}/launch.json.in"
+        "${_K2C_VSCODE_DIR}/launch.json"
+        @ONLY
+    )
+endif()
+
+if(NOT EXISTS "${_K2C_VSCODE_DIR}/tasks.json")
+    configure_file(
+        "${_K2C_TPL_DIR}/tasks.json.in"
+        "${_K2C_VSCODE_DIR}/tasks.json"
+        @ONLY
+    )
+endif()

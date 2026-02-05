@@ -1,0 +1,18 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Download (OpenOCD)",
+      "type": "process",
+      "command": "@K2C_OPENOCD_PATH@",
+      "args": [
+@K2C_OPENOCD_SCRIPTS_ARGS@
+        "-f",
+        "${workspaceFolder}/cmake/user/openocd.cfg",
+        "-c",
+        "program @K2C_DEBUG_EXECUTABLE@ verify reset exit"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

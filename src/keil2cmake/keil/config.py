@@ -27,6 +27,7 @@ def load_config() -> configparser.ConfigParser:
         'CMAKE_PATH': 'cmake',
         'NINJA_PATH': 'ninja',
         'CHECKCPP_PATH': 'checkcpp',
+        'OPENOCD_PATH': 'openocd',
     }
     defaults_general = {
         'LANGUAGE': 'zh',
@@ -67,7 +68,7 @@ def edit_config(edit_string: str) -> bool:
     configkey, value = edit_string.split('=', 1)
     configkey = configkey.strip().upper()
 
-    valid_path_keys = ['ARMGCC_PATH', 'CMAKE_PATH', 'NINJA_PATH', 'CHECKCPP_PATH']
+    valid_path_keys = ['ARMGCC_PATH', 'CMAKE_PATH', 'NINJA_PATH', 'CHECKCPP_PATH', 'OPENOCD_PATH']
     valid_general_keys = ['LANGUAGE']
     valid_keys = valid_path_keys + valid_general_keys
 
@@ -121,6 +122,11 @@ def get_cmake_path() -> str:
 def get_checkcpp_path() -> str:
     config = load_config()
     return expand_path(config['PATHS'].get('CHECKCPP_PATH', 'checkcpp'))
+
+
+def get_openocd_path() -> str:
+    config = load_config()
+    return expand_path(config['PATHS'].get('OPENOCD_PATH', 'openocd'))
 
 
 def get_cmake_min_version() -> str:

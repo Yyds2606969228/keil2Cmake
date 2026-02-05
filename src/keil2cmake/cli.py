@@ -10,6 +10,7 @@ from .project_gen import generate_cmake_structure
 from .compiler.toolchains import generate_toolchains
 from .compiler.presets import generate_cmake_presets
 from .compiler.clangd import generate_clangd_config
+from .compiler.debug import generate_debug_templates
 from .i18n import set_language, t
 
 
@@ -48,12 +49,13 @@ def main(argv=None) -> int:
 
     generate_cmake_structure(project_data, project_root)
     generate_toolchains(project_data, project_root)
-    generate_cmake_presets(project_root)
+    generate_cmake_presets(project_root, project_data)
     generate_clangd_config(
         project_root,
         detect_cpu_architecture(project_data['device']),
         project_data.get('use_microlib'),
     )
+    generate_debug_templates(project_root)
 
     print('\n' + t('cli.done'))
     print(f"  {t('cli.summary.project')}: {project_data['project_name']}")

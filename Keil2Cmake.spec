@@ -21,6 +21,7 @@ a = Analysis(
         'keil2cmake.compiler.toolchains',
         'keil2cmake.compiler.presets',
         'keil2cmake.compiler.clangd',
+        'keil2cmake.compiler.debug',
         'keil2cmake.compiler.armgcc.layout',
         'jinja2',
     ],
