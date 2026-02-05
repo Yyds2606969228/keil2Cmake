@@ -1,0 +1,42 @@
+﻿{{ header_title }}
+
+cmake_minimum_required(VERSION {{ cmake_min_version }})
+
+set(CMAKE_SYSTEM_NAME Generic)
+set(CMAKE_SYSTEM_PROCESSOR {{ cpu_name }})
+
+if(EXISTS "{{ user_rel }}")
+    include("{{ user_rel }}")
+endif()
+
+set(ARMGCC_BIN "{{ armgcc_bin }}")
+set(K2C_ARMGCC_SYSROOT "{{ armgcc_sysroot }}")
+
+{{ linker_header }}
+set(_K2C_LD_DEFAULT "${CMAKE_CURRENT_LIST_DIR}/{{ default_ld_file }}")
+if(K2C_LINKER_SCRIPT_LD STREQUAL "")
+    set(K2C_LINKER_SCRIPT_LD "${_K2C_LD_DEFAULT}" CACHE FILEPATH "Linker script for armgcc" FORCE)
+endif()
+
+set(CMAKE_C_COMPILER   "${ARMGCC_BIN}/arm-none-eabi-gcc.exe")
+set(CMAKE_CXX_COMPILER "${ARMGCC_BIN}/arm-none-eabi-g++.exe")
+set(CMAKE_ASM_COMPILER "${ARMGCC_BIN}/arm-none-eabi-gcc.exe")
+set(CMAKE_AR           "${ARMGCC_BIN}/arm-none-eabi-ar.exe")
+set(CMAKE_OBJCOPY      "${ARMGCC_BIN}/arm-none-eabi-objcopy.exe")
+set(CMAKE_SIZE         "${ARMGCC_BIN}/arm-none-eabi-size.exe")
+
+set(_K2C_COMMON_FLAGS "-mcpu={{ cpu_name }} -mthumb -ffunction-sections -fdata-sections")
+if(NOT K2C_ARMGCC_SYSROOT STREQUAL "")
+    set(_K2C_COMMON_FLAGS "${_K2C_COMMON_FLAGS} --sysroot=${K2C_ARMGCC_SYSROOT}")
+endif()
+set(CMAKE_C_FLAGS_INIT   "${_K2C_COMMON_FLAGS}")
+set(CMAKE_CXX_FLAGS_INIT "${_K2C_COMMON_FLAGS}")
+set(CMAKE_ASM_FLAGS_INIT "${_K2C_COMMON_FLAGS}")
+
+set(CMAKE_C_COMPILER_WORKS 1 CACHE INTERNAL "")
+set(CMAKE_CXX_COMPILER_WORKS 1 CACHE INTERNAL "")
+set(CMAKE_ASM_COMPILER_WORKS 1 CACHE INTERNAL "")
+set(CMAKE_C_COMPILER_FORCED TRUE CACHE INTERNAL "")
+set(CMAKE_CXX_COMPILER_FORCED TRUE CACHE INTERNAL "")
+
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)

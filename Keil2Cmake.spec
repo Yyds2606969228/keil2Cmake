@@ -1,25 +1,28 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import Tree
+
 block_cipher = None
 
 a = Analysis(
-    ['Keil2Cmake.py'],
-    pathex=[],
+    ['scripts/Keil2Cmake.py'],
+    pathex=['src'],
     binaries=[],
-    datas=[],
+    datas=[Tree('src/keil2cmake/templates', prefix='keil2cmake/templates')],
     hiddenimports=[
-        'keil2cmake_cli',
-        'keil2cmake_common',
-        'i18n',
-        'project_gen',
-        'keil.uvprojx',
-        'keil.device',
-        'keil.config',
-        'compiler.toolchains',
-        'compiler.presets',
-        'compiler.clangd',
-        'compiler.templates',
-        'compiler.armgcc.layout',
+        'keil2cmake.cli',
+        'keil2cmake.common',
+        'keil2cmake.i18n',
+        'keil2cmake.project_gen',
+        'keil2cmake.template_engine',
+        'keil2cmake.keil.uvprojx',
+        'keil2cmake.keil.device',
+        'keil2cmake.keil.config',
+        'keil2cmake.compiler.toolchains',
+        'keil2cmake.compiler.presets',
+        'keil2cmake.compiler.clangd',
+        'keil2cmake.compiler.armgcc.layout',
+        'jinja2',
     ],
     hookspath=[],
     hooksconfig={},

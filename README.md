@@ -1,194 +1,68 @@
-# Keil2Cmake
+﻿# Keil2Cmake
 
 **中文** | [English](README_EN.md)
 
-Keil uVision 到 CMake 转换工具 (v3.0)，支持三大 ARM 工具链、CMake Presets、国际化输出。
+Keil uVision -> CMake 转换工具（仅 ARM-GCC，含 clangd 支持）。
 
-## ✨ 功能特性
+## 功能
+- 自动解析 `.uvprojx` 并生成 CMake 工程
+- 仅支持 ARM-GCC 工具链
+- 自动生成 `.clangd` 配置
+- 预置构建与静态分析命令
 
-- 🔄 **自动转换** Keil .uvprojx 到 CMake + CMakePresets.json
-- 🛠️ **三大工具链** ARMCC (C5) / ARMCLANG (C6) / ARM-GCC
-- 🌍 **国际化** 中英文双语 (`--lang zh/en`)
-- 🎯 **智能解析** 自动识别编译器类型和优化级别
-- 💡 **IDE 集成** 自动生成 `.clangd` 配置
-- 📁 **精简结构** 单一 toolchain + 单一用户配置文件
+## 快速开始
+### 1. 配置工具路径
+配置文件：`~/.config/keil2cmake/path.cfg`
 
-## 🚀 快速开始
+示例：
+```ini
+[PATHS]
+ARMGCC_PATH = D:/Toolchains/arm-gcc/bin
+CMAKE_PATH = C:/Program Files/CMake/bin/cmake.exe
+NINJA_PATH = D:/Tools/ninja/ninja.exe
+CHECKCPP_PATH = D:/Tools/cppcheck/cppcheck.exe
 
-### 1. 配置编译器
-
-```bash
-Keil2Cmake -e ARMCC_PATH=D:/Keil_v5/ARM/ARMCC/bin/
-Keil2Cmake -e ARMCC_INCLUDE=D:/Keil_v5/ARM/ARMCC/include/
-Keil2Cmake --show-config  # 查看配置
+[GENERAL]
+LANGUAGE = zh
 ```
 
-### 2. 转换项目
-
+### 2. 生成 CMake 工程
 ```bash
-Keil2Cmake project.uvprojx           # 基本转换
-Keil2Cmake --lang en project.uvprojx # 英文输出
+Keil2Cmake project.uvprojx -o ./cmake_project
 ```
 
-### 3. 构建
-
+### 3. 构建与静态分析
 ```bash
-cmake --preset keil2cmake            # 使用默认编译器
-cmake --build --preset keil2cmake
-
-# 或切换编译器
-cmake --preset keil2cmake-armclang
-cmake --preset keil2cmake-armgcc
+cmake --preset keil2cmake
+cmake --build --preset build
+cmake --build --preset check
 ```
 
-## 📋 命令参数
-
-```bash
-Keil2Cmake --help  # 查看完整帮助
-```
-
-| 参数 | 说明 |
-|------|------|
-| `uvprojx` | Keil 项目文件 |
-| `-o DIR` | 输出目录（默认自动推导）|
-| `--compiler` | 覆盖编译器：armcc/armclang/armgcc |
-| `--optimize` | 覆盖优化：0/1/2/3/s |
-| `--lang` | 语言：zh/en |
-| `--clean` | 清理生成文件 |
-| `-e KEY=VAL` | 编辑配置 |
-| `--show-config` | 显示配置 |
-
-**CMake 变量**：
-- `K2C_COMPILER` - 编译器选择
-- `K2C_OPTIMIZE_LEVEL` - 优化级别
-- `K2C_LINKER_SCRIPT_SCT` / `K2C_LINKER_SCRIPT_LD` - Linker 脚本覆盖
-
-查看 CMake 选项：
-```bash
-cmake --build --preset keil2cmake --target show-options
-```
-
-## 📁 生成的文件
-
+## 生成文件结构
 ```
 project_root/
-├── CMakeLists.txt           # 主构建文件
-├── CMakePresets.json        # 预设配置
-├── .clangd                  # IDE 代码提示
+├── CMakeLists.txt
+├── CMakePresets.json
+├── .clangd
 └── cmake/
-    ├── internal/            # ⚠️ 自动生成，勿编辑
+    ├── internal/
     │   ├── toolchain.cmake
-    │   ├── keil2cmake_default.sct
-    │   └── keil2cmake_default.ld
+    │   ├── keil2cmake_default.ld
+    │   └── keil2cmake_from_sct.ld
     └── user/
-        └── keil2cmake_user.cmake  # ✏️ 可编辑配置
+        └── keil2cmake_user.cmake
 ```
 
-**用户可编辑**：`cmake/user/keil2cmake_user.cmake`
-- 源文件/头文件/宏定义列表
-- 覆盖优化级别和 linker 脚本
-
-## ⚙️ 配置文件
-
-配置位置：`~/.keil2cmake/config.json`
-
-**可配置项**：
-- `ARMCC_PATH` / `ARMCLANG_PATH` / `ARMGCC_PATH` - 编译器路径
-- `ARMCC_INCLUDE` / `ARMCLANG_INCLUDE` - 系统头文件
-- `ARMGCC_SYSROOT` / `ARMGCC_INCLUDE` - GCC 配置
-- `LANGUAGE` - 默认语言（zh/en）
-- `MIN_VERSION` - 最低 CMake 版本
-
-## 🔧 优化级别
-
-Keil `<Optim>` 自动映射：
-
-| Keil | ARMCC | ARMCLANG | GCC |
-|------|-------|----------|-----|
-| 0 | -O0 | -O0 | -O0 |
-| 1 | -O1 | -O1 | -O1 |
-| 2 | -O2 | -O2 | -O2 |
-| 3 | -O3 | -O3 | -O3 |
-| 4 | -O1 | -O1 | -O1 |
-| 11 | -Ospace | -Oz | -Os |
-
-## ❓ 常见问题
-
-**找不到编译器**
-```bash
-Keil2Cmake -e ARMCC_PATH=D:/Keil_v5/ARM/ARMCC/bin/
-```
-
-**找不到头文件**
-```bash
-Keil2Cmake -e ARMCC_INCLUDE=D:/Keil_v5/ARM/ARMCC/include/
-```
-
-**Clangd 不工作**
-- 检查 `.clangd` 文件是否存在
-- 重启 VS Code（Ctrl+Shift+P → "Reload Window"）
-
-**查看详细输出**
-```bash
-cmake --preset keil2cmake --debug-output
-cmake --build build --verbose
-```
-
-## 📦 开发
-
-```bash
-# 克隆并安装
-git clone https://gitee.com/yyds6589/keil2cmake.git
-cd Keil2Cmake
-pip install -r requirements.txt
-
-# 运行测试
-python -m unittest discover -s tests -v
-
-# 构建可执行文件（推荐使用 spec 配置）
-pyinstaller Keil2Cmake.spec
-
-# 或使用命令行方式
-pyinstaller -F --name Keil2Cmake \
-  --exclude-module tkinter \
-  --hidden-import keil2cmake_cli \
-  --hidden-import keil2cmake_common \
-  --hidden-import i18n \
-  --collect-submodules keil \
-  --collect-submodules compiler \
-  Keil2Cmake.py
-
-# 生成的可执行文件：dist/Keil2Cmake.exe (Windows) 或 dist/Keil2Cmake (Linux/Mac)
-```
-
-## 📝 更新日志
-
-### v3.1 (2026-01)
-- 🐛 **修复 .clangd 配置问题**
-  - ✅ 添加 `CompilationDatabase` 路径配置，解决 compile_commands.json 未识别问题
-  - ✅ 添加 `-D__NO_EMBEDDED_ASM` 宏定义，解决 `__disable_irq` 等内置函数未声明问题
-  - ✅ 添加 `-fms-extensions` 选项，支持 `__declspec` 属性
-  - ✅ 将 `-D__CC_ARM` 移至 Remove 列表，避免 ARMCC 内联汇编解析错误
-  - ✅ 修正 `StandardLibrary: false`（原为错误的字符串值）
-  - ✅ 移除不支持的 `WorkspaceSymbol` 配置块
-- 🐛 **修复 Scatter File BOM 问题**
-  - ✅ 自动检测并移除链接脚本文件中的 BOM 字符（`\ufeff`）
-  - ✅ 避免 armlink 因 BOM 字符导致的链接失败
-  - ✅ 添加 BOM 清理提示信息
-
-### v3.0 (2026-01)
-- ✨ CMake Presets + 精简文件结构
-- ✨ 中英文国际化 + 智能编译器识别
-- ✨ 优化级别映射修复（ARMCC/ARMCLANG/GCC）
-- ✨ 内置帮助系统（`--help` + `show-options`）
-
-### v2.0
-- ✅ 动态配置 + clangd 支持
-
-### v1.0
-- 🎉 初始版本
+## 说明
+- `cmake --build --preset check` 使用 `CHECKCPP_PATH` 指定的工具进行静态分析。
+- `.clangd` 已针对 ARM-GCC 做了 sysroot/内部头文件处理。
+- `K2C_USE_NEWLIB_NANO=ON` 可启用 newlib-nano；如需浮点支持，设置 `K2C_NEWLIB_NANO_PRINTF_FLOAT=ON` / `K2C_NEWLIB_NANO_SCANF_FLOAT=ON`。
+- 兼容层：自动识别 Keil 使用的 ARMCC/ARMCLANG，并将 MicroLIB 设置映射为 newlib-nano 的默认开关（可手动覆盖）。
+- 汇编兼容：检测到 `.s/.asm` 会直接加入构建（ARMASM 需手动改写为 GCC 语法）；可手动设置 `K2C_GCC_STARTUP` 指定 GCC 启动文件。
+- 链接脚本转换：若 Keil 工程配置了 `.sct`，会生成 `cmake/internal/keil2cmake_from_sct.ld` 并作为默认 GCC 链接脚本（严格模板转换，需自行核对内存布局；解析失败会回退到默认脚本）。
+- checkcpp 参数：可在 `cmake/user/keil2cmake_user.cmake` 配置 `K2C_CHECKCPP_ENABLE` 或一组开关 `K2C_CHECKCPP_ENABLE_*`（ON/OFF）来生成 `--enable`；同时支持 `K2C_CHECKCPP_JOBS` / `K2C_CHECKCPP_EXCLUDES` / `K2C_CHECKCPP_INCONCLUSIVE`。
 
 ---
 
-⭐ **[GitHub](https://github.com/Yyds2606969228/keil2Cmake)**
-⭐ **[Gitee](https://gitee.com/yyds6589/keil2cmake)**
+**[GitHub](https://github.com/Yyds2606969228/keil2Cmake)**
+**[Gitee](https://gitee.com/yyds6589/keil2cmake)**

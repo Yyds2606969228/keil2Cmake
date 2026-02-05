@@ -4,7 +4,7 @@ import glob
 import os
 from pathlib import Path
 
-from keil2cmake_common import expand_path, norm_path
+from ...common import expand_path, norm_path
 
 
 def infer_sysroot_from_armgcc_path(armgcc_path: str) -> str:

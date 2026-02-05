@@ -1,0 +1,59 @@
+﻿{{ header_title }}
+{{ header_safe }}
+{{ header_no_overwrite }}
+
+set(K2C_PROJECT_NAME "{{ project_name }}")
+set(K2C_DEVICE "{{ device }}")
+set(K2C_CPU_ARCH "{{ cpu_arch }}")
+
+{{ defaults_header }}
+set(K2C_DEFAULT_OPTIMIZE_LEVEL "{{ default_opt_level }}")
+
+{{ optimize_header }}
+set(K2C_OPTIMIZE_LEVEL "" CACHE STRING "Force optimize level (0/1/2/3/s). Empty = use Keil default")
+
+{{ linker_header }}
+set(K2C_LINKER_SCRIPT_LD  "" CACHE FILEPATH "Linker script for armgcc")
+
+set(K2C_CHECKCPP "" CACHE FILEPATH "checkcpp executable")
+set(K2C_CHECKCPP_JOBS "" CACHE STRING "cppcheck -j <N>")
+set(K2C_CHECKCPP_EXCLUDES "" CACHE STRING "cppcheck --exclude list (CMake list: a;b;c)")
+set(K2C_CHECKCPP_ENABLE "" CACHE STRING "cppcheck --enable=<ids>, comma-separated (override switches)")
+set(K2C_CHECKCPP_ENABLE_ALL OFF CACHE BOOL "cppcheck --enable=all")
+set(K2C_CHECKCPP_ENABLE_WARNING OFF CACHE BOOL "cppcheck --enable=warning")
+set(K2C_CHECKCPP_ENABLE_STYLE OFF CACHE BOOL "cppcheck --enable=style")
+set(K2C_CHECKCPP_ENABLE_PERFORMANCE OFF CACHE BOOL "cppcheck --enable=performance")
+set(K2C_CHECKCPP_ENABLE_PORTABILITY OFF CACHE BOOL "cppcheck --enable=portability")
+set(K2C_CHECKCPP_ENABLE_INFORMATION OFF CACHE BOOL "cppcheck --enable=information")
+set(K2C_CHECKCPP_ENABLE_UNUSED_FUNCTION OFF CACHE BOOL "cppcheck --enable=unusedFunction")
+set(K2C_CHECKCPP_ENABLE_MISSING_INCLUDE OFF CACHE BOOL "cppcheck --enable=missingInclude")
+set(K2C_CHECKCPP_INCONCLUSIVE OFF CACHE BOOL "cppcheck --inconclusive")
+set(K2C_USE_NEWLIB_NANO {{ use_newlib_nano_default }} CACHE BOOL "Use newlib-nano (ARM-GCC)")
+set(K2C_NEWLIB_NANO_PRINTF_FLOAT OFF CACHE BOOL "Enable printf float for newlib-nano")
+set(K2C_NEWLIB_NANO_SCANF_FLOAT OFF CACHE BOOL "Enable scanf float for newlib-nano")
+set(K2C_ASM_DETECTED {{ asm_detected }} CACHE BOOL "ASM sources detected")
+{% if gcc_startup %}# Suggested GCC startup (not included by default): {{ gcc_startup }}
+{% endif %}set(K2C_GCC_STARTUP "" CACHE FILEPATH "GCC startup file to replace ASM")
+{% if asm_sources %}
+# ASM sources included in build (rewrite to GCC if needed):
+{% for a in asm_sources %}#   {{ a }}
+{% endfor %}set(K2C_ASM_SOURCES
+{% for a in asm_sources %}    "{{ a }}"
+{% endfor %})
+{% endif %}
+
+set(K2C_SOURCES
+{% for s in sources %}    "{{ s }}"
+{% endfor %})
+
+set(K2C_INCLUDE_DIRS
+{% for inc in includes %}    "{{ inc }}"
+{% endfor %})
+
+set(K2C_DEFINES
+{% for d in defines %}    {{ d }}
+{% endfor %})
+
+set(K2C_KEIL_MISC_C_FLAGS "{{ misc_c_flags }}")
+set(K2C_KEIL_MISC_ASM_FLAGS "{{ misc_asm_flags }}")
+set(K2C_KEIL_MISC_LD_FLAGS "{{ misc_ld_flags }}")

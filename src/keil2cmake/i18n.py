@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 
 from __future__ import annotations
 
@@ -14,34 +14,33 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "cli.error.uvprojx_required": "必须提供 .uvprojx 文件路径",
         "cli.error.clean_requires_target": "使用 --clean 时必须提供 .uvprojx 或通过 -o 指定要清理的输出目录",
         "cli.error.file_not_found": "错误: 文件不存在 - {path}",
-        "cli.show_config.toolchains": "当前工具链配置:",
-        "cli.show_config.includes": "当前头文件路径配置:",
+        "cli.show_config.toolchains": "工具链配置:",
+        "cli.show_config.includes": "头文件路径配置:",
         "cli.show_config.ninja": "Ninja 配置:",
-        "cli.show_config.cmake": "CMake配置:",
-        "cli.done": "✓ 成功生成 CMake 工程配置",
+        "cli.show_config.cmake": "CMake 配置:",
+        "cli.done": "完成：已生成 CMake 工程配置",
         "cli.summary.project": "项目",
         "cli.summary.device": "设备",
         "cli.summary.compiler": "编译器",
+        "cli.summary.keil_compiler": "Keil 编译器",
+        "cli.summary.microlib": "MicroLIB",
         "cli.summary.optimize": "优化等级",
-        "cli.help.description": "Keil uVision 转 CMake 工具 (支持 ARM 嵌入式工具链和 clangd)",
+        "cli.help.description": "Keil uVision 转 CMake 工具（仅 ARM-GCC，含 clangd 支持）",
         "cli.help.uvprojx": "Keil .uvprojx 项目文件路径",
-        "cli.help.output": "输出目录。默认：自动从 .uvprojx 推导（MDK-ARM → 父目录）",
+        "cli.help.output": "输出目录",
         "cli.help.clean": "清理生成的 CMake 文件",
         "cli.help.lang": "语言设置：zh（中文）或 en（英文）",
-        "cli.help.compiler": "覆盖编译器：armcc / armclang / armgcc",
+        "cli.help.compiler": "覆盖编译器：armgcc",
         "cli.help.optimize": "覆盖优化等级：0/1/2/3/s",
-        "cli.help.edit": "编辑配置，格式：KEY=VALUE（如 ARMCC_PATH=D:/path）",
-        "cli.help.show_config": "显示当前工具链和头文件路径配置",
+        "cli.help.edit": "编辑配置：KEY=VALUE",
+        "cli.help.show_config": "显示当前配置",
         "cli.help.examples": """示例:
-  %(prog)s project.uvprojx                    # 转换 Keil 项目为 CMake
-  %(prog)s -e ARMCC_PATH=D:/Keil/ARMCC/bin/  # 修改编译器路径
-  %(prog)s -e ARMCC_INCLUDE=D:/Keil/include/ # 修改头文件路径
-  %(prog)s --show-config                      # 显示当前配置
-  %(prog)s -o ./build project.uvprojx         # 指定输出目录
-  %(prog)s --clean -o .                       # 清理生成的文件
-  %(prog)s --lang en project.uvprojx          # 使用英文输出""",
+  %(prog)s project.uvprojx -o ./cmake_project
+""",
         "cli.summary.output": "输出目录",
-        "cli.build_cmds": "✓ 构建命令:",
+        "cli.build_cmds": "构建命令:",
+        "cli.compat.note": "已启用 ARMCC/ARMCLANG 兼容模式，生成 ARM-GCC 工程（部分选项可能需要手工调整）",
+        "cli.compat.armasm": "检测到汇编源文件，已加入构建（ARMASM 需重写为 GCC 语法）。",
         # Keil parsing
         "uvprojx.get_target": "读取目标信息...",
         "uvprojx.collect_sources": "收集源文件...",
@@ -53,24 +52,26 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "uvprojx.flags": "读取编译/汇编/链接选项...",
         "uvprojx.optimize": "读取优化等级...",
         # Cleaning
-        "clean.done": "✓ 清理完成: 已移除 {count} 个 keil2cmake 生成文件",
-        "clean.none": "✓ 清理完成: 未发现可移除的 keil2cmake 生成文件",
+        "clean.done": "清理完成：已移除 {count} 个 keil2cmake 生成文件",
+        "clean.none": "清理完成：未发现可移除的 keil2cmake 生成文件",
         # Config
-        "config.updated": "已更新配置: {configkey} = {value}",
-        "config.error.format": "错误: 编辑格式应为 KEY=VALUE, 但得到的是: {value}",
-        "config.error.invalid_key": "错误: 无效的配置键 '{configkey}'。有效的键: {valid}",
+        "config.updated": "已更新配置 {configkey} = {value}",
+        "config.error.format": "错误: 编辑格式应为 KEY=VALUE，实际为 {value}",
+        "config.error.invalid_key": "错误: 无效的配置键 '{configkey}'。有效键: {valid}",
 
         # Generated CMake comments
         "gen.user.header.title": "# Keil2Cmake 生成的用户配置文件",
-        "gen.user.header.safe": "# 可安全编辑: 源文件/头文件/宏/flags。",
+        "gen.user.header.safe": "# 可安全编辑：源文件/头文件/宏/flags。",
         "gen.user.header.no_overwrite": "# 重新运行生成器时，若文件已存在将不会覆盖。",
         "gen.user.defaults": "# Keil 工程默认设置",
-        "gen.user.optimize": "# 覆盖优化等级: 0/1/2/3/s。留空 = 使用 Keil 默认值",
-        "gen.user.linker": "# 可选的链接器脚本覆盖。留空时，工具链使用 cmake/internal 下的默认值。",
+        "gen.user.optimize": "# 覆盖优化等级: 0/1/2/3/s。留空 = 使用 Keil 默认值。",
+        "gen.user.linker": "# 可选的 linker 脚本覆盖。留空时使用 cmake/internal 下的默认值。",
         "gen.toolchain.header.title": "# Keil2Cmake 自动生成的工具链文件",
         "gen.toolchain.select_compiler": "# 选择编译器（通常由 CMakePresets.json 提供）",
-        "gen.toolchain.linker_scripts": "# 默认链接器脚本位于 cmake/internal（可通过 K2C_LINKER_SCRIPT_* 覆盖）",
+        "gen.toolchain.linker_scripts": "# 默认 linker 脚本位于 cmake/internal（可通过 K2C_LINKER_SCRIPT_LD 覆盖）",
         "gen.toolchain.bom_removed": "已从链接脚本中移除 BOM 字符",
+        "gen.toolchain.sct_converted": "已从 scatter 生成 GCC 链接脚本",
+        "gen.toolchain.sct_failed": "scatter 自动转换失败，已回退到默认链接脚本",
     },
     "en": {
         # CLI
@@ -81,30 +82,29 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "cli.show_config.includes": "Include paths configuration:",
         "cli.show_config.ninja": "Ninja configuration:",
         "cli.show_config.cmake": "CMake configuration:",
-        "cli.done": "✓ CMake project generated successfully",
+        "cli.done": "Done: CMake project generated",
         "cli.summary.project": "Project",
         "cli.summary.device": "Device",
         "cli.summary.compiler": "Compiler",
+        "cli.summary.keil_compiler": "Keil Compiler",
+        "cli.summary.microlib": "MicroLIB",
         "cli.summary.optimize": "Optimization",
-        "cli.help.description": "Keil uVision to CMake converter for ARM Embedded Toolchains (with clangd support)",
+        "cli.help.description": "Keil uVision to CMake converter (ARM-GCC only, with clangd support)",
         "cli.help.uvprojx": "Path to Keil .uvprojx project file",
-        "cli.help.output": "Output directory. Default: auto-derived from .uvprojx (MDK-ARM → parent)",
+        "cli.help.output": "Output directory",
         "cli.help.clean": "Clean generated CMake files",
         "cli.help.lang": "Language setting: zh (Chinese) or en (English)",
-        "cli.help.compiler": "Override compiler: armcc / armclang / armgcc",
+        "cli.help.compiler": "Override compiler: armgcc",
         "cli.help.optimize": "Override optimization level: 0/1/2/3/s",
-        "cli.help.edit": "Edit config in format KEY=VALUE (e.g., ARMCC_PATH=D:/path)",
-        "cli.help.show_config": "Show current toolchain and include paths configuration",
+        "cli.help.edit": "Edit config in format KEY=VALUE",
+        "cli.help.show_config": "Show current configuration",
         "cli.help.examples": """Examples:
-  %(prog)s project.uvprojx                    # Convert Keil project to CMake
-  %(prog)s -e ARMCC_PATH=D:/Keil/ARMCC/bin/  # Edit compiler path
-  %(prog)s -e ARMCC_INCLUDE=D:/Keil/include/ # Edit include path
-  %(prog)s --show-config                      # Show current configuration
-  %(prog)s -o ./build project.uvprojx         # Specify output directory
-  %(prog)s --clean -o .                       # Clean generated files
-  %(prog)s --lang zh project.uvprojx          # Use Chinese output""",
+  %(prog)s project.uvprojx -o ./cmake_project
+""",
         "cli.summary.output": "Output",
-        "cli.build_cmds": "✓ Build commands:",
+        "cli.build_cmds": "Build commands:",
+        "cli.compat.note": "ARMCC/ARMCLANG compatibility enabled, generating ARM-GCC project (some options may need manual adjustment).",
+        "cli.compat.armasm": "ASM sources detected and included in build (ARMASM must be rewritten to GCC syntax).",
         # Keil parsing
         "uvprojx.get_target": "Reading target info...",
         "uvprojx.collect_sources": "Collecting source files...",
@@ -116,8 +116,8 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "uvprojx.flags": "Reading C/ASM/LD flags...",
         "uvprojx.optimize": "Reading optimization level...",
         # Cleaning
-        "clean.done": "✓ Clean complete: removed {count} keil2cmake generated files",
-        "clean.none": "✓ Clean complete: no keil2cmake generated files found",
+        "clean.done": "Clean complete: removed {count} keil2cmake generated files",
+        "clean.none": "Clean complete: no keil2cmake generated files found",
         # Config
         "config.updated": "Updated: {configkey} = {value}",
         "config.error.format": "Error: edit format must be KEY=VALUE, got: {value}",
@@ -132,8 +132,10 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "gen.user.linker": "# Optional linker overrides. If empty, toolchain sets defaults under cmake/internal.",
         "gen.toolchain.header.title": "# Auto-generated toolchain by Keil2Cmake",
         "gen.toolchain.select_compiler": "# Select compiler (usually provided by CMakePresets.json)",
-        "gen.toolchain.linker_scripts": "# Default linker scripts live in cmake/internal (can be overridden via K2C_LINKER_SCRIPT_*)",
+        "gen.toolchain.linker_scripts": "# Default linker scripts live in cmake/internal (can be overridden via K2C_LINKER_SCRIPT_LD)",
         "gen.toolchain.bom_removed": "Removed BOM from linker script",
+        "gen.toolchain.sct_converted": "Converted scatter file to GCC linker script",
+        "gen.toolchain.sct_failed": "Scatter conversion failed; falling back to default linker script",
     },
 }
 

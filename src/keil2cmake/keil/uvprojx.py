@@ -1,13 +1,41 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 
 import xml.etree.ElementTree as ET
 import os
 
-from i18n import t
+from ..i18n import t
+
+
+def _parse_bool(text: str | None) -> bool | None:
+    if text is None:
+        return None
+    value = str(text).strip().lower()
+    if value in ('1', 'true', 'yes', 'on'):
+        return True
+    if value in ('0', 'false', 'no', 'off'):
+        return False
+    return None
+
+
+def _find_bool(root: ET.Element, tag_names: list[str]) -> bool | None:
+    for name in tag_names:
+        node = root.find(f'.//{name}')
+        if node is not None and node.text is not None:
+            parsed = _parse_bool(node.text)
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _detect_keil_compiler(root: ET.Element) -> str:
+    # uAC6=1 indicates Arm Compiler 6 (armclang) in many uvprojx files.
+    # Fall back to armcc when not found.
+    use_armclang = _find_bool(root, ['uAC6', 'UseArmClang'])
+    return 'armclang' if use_armclang else 'armcc'
 
 
 def parse_uvprojx(uvprojx_path: str) -> dict:
-    """解析 uvprojx 文件，提取项目配置。"""
+    """解析 uvprojx 文件，提取项目信息。"""
     tree = ET.parse(uvprojx_path)
     root = tree.getroot()
 
@@ -49,15 +77,10 @@ def parse_uvprojx(uvprojx_path: str) -> dict:
         device_name = device_node.text
 
     print(t('uvprojx.compiler'))
-    use_armclang = False
-    # Check uAC6 node (0=ARMCC/Compiler5, 1=ARMCLANG/Compiler6)
-    uac6_node = root.find('.//uAC6')
-    if uac6_node is not None:
-        print(f"  uAC6 = {uac6_node.text}")
-        if uac6_node.text == '1':
-            use_armclang = True
-    else:
-        print(f"  uAC6 node not found, defaulting to ARMCC")
+    keil_compiler = _detect_keil_compiler(root)
+    print(f"  Keil compiler = {keil_compiler}")
+
+    use_microlib = _find_bool(root, ['UseMicroLIB', 'UseMicroLib', 'uMicrolib', 'uMicroLIB'])
 
     print(t('uvprojx.flags'))
     c_flags = root.find('.//TargetOption/TargetArmAds/Cads/VariousControls/MiscControls')
@@ -74,7 +97,7 @@ def parse_uvprojx(uvprojx_path: str) -> dict:
         keil_optim = optim_node.text
         print(f"  Keil Optim = {keil_optim}")
     else:
-        print(f"  Optim not found, defaulting to 0")
+        print("  Optim not found, defaulting to 0")
 
     print()
 
@@ -94,6 +117,7 @@ def parse_uvprojx(uvprojx_path: str) -> dict:
         'asm_flags': asm_flags,
         'ld_flags': ld_flags,
         'output_dir': output_dir,
-        'use_armclang': use_armclang,
         'keil_optim': keil_optim,  # Store raw Keil value for compiler-specific mapping
+        'keil_compiler': keil_compiler,
+        'use_microlib': use_microlib,
     }
