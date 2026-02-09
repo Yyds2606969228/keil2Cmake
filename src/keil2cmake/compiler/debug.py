@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 
 import os
+from pathlib import Path
 
 from ..common import ensure_dir
-from ..template_engine import write_template
+from ..keil.config import get_armgcc_path, get_openocd_path
+from ..template_engine import write_template, write_at_template
 
 
 def infer_openocd_target(device: str) -> str:
@@ -36,6 +38,93 @@ def infer_openocd_target(device: str) -> str:
     return ""
 
 
+
+
+def infer_openocd_interface(debugger: str) -> str:
+    if not debugger:
+        return ""
+    dbg = str(debugger).strip().lower()
+    mapping = {
+        "stlink": "interface/stlink.cfg",
+        "jlink": "interface/jlink.cfg",
+        "daplink": "interface/cmsis-dap.cfg",
+    }
+    return mapping.get(dbg, "")
+
+
+def _normalize_json_path(path: str) -> str:
+    return str(path).replace("\\", "/") if path else ""
+
+
+def _infer_armgcc_bin_dir(armgcc_path: str) -> str:
+    if not armgcc_path:
+        return ""
+    p = Path(armgcc_path)
+    if p.is_file():
+        return str(p.parent)
+    return str(p)
+
+
+def _infer_gdb_path(armgcc_path: str) -> str:
+    bin_dir = _infer_armgcc_bin_dir(armgcc_path)
+    if not bin_dir:
+        return "arm-none-eabi-gdb"
+    exe = "arm-none-eabi-gdb.exe" if os.name == "nt" else "arm-none-eabi-gdb"
+    return os.path.join(bin_dir, exe)
+
+
+def generate_openocd_files(project_root: str, mcu: str, debugger: str) -> dict[str, str]:
+    """Generate cortex-debug launch/tasks and OpenOCD config for an existing CMake project."""
+    root = os.path.abspath(project_root)
+    vscode_dir = os.path.join(root, ".vscode")
+    user_dir = os.path.join(root, "cmake", "user")
+    ensure_dir(vscode_dir)
+    ensure_dir(user_dir)
+
+    openocd_path = get_openocd_path() or "openocd"
+    gdb_path = _infer_gdb_path(get_armgcc_path())
+    debug_executable = "${workspaceFolder}/build/${workspaceFolderBasename}.elf"
+
+    openocd_target = infer_openocd_target(mcu)
+    openocd_interface = infer_openocd_interface(debugger)
+
+    context = {
+        "K2C_OPENOCD_PATH": _normalize_json_path(openocd_path),
+        "K2C_GDB_PATH": _normalize_json_path(gdb_path),
+        "K2C_DEBUG_EXECUTABLE": _normalize_json_path(debug_executable),
+        "K2C_OPENOCD_SEARCHDIR_JSON": "",
+        "K2C_OPENOCD_SCRIPTS_ARGS": "",
+        "K2C_OPENOCD_BOARD_LINE": "",
+        "K2C_OPENOCD_INTERFACE_LINE": (
+            f"source [find {openocd_interface}]" if openocd_interface else ""
+        ),
+        "K2C_OPENOCD_TARGET_LINE": (
+            f"source [find {openocd_target}]" if openocd_target else ""
+        ),
+    }
+
+    openocd_cfg = os.path.join(user_dir, "openocd.cfg")
+    if not os.path.exists(openocd_cfg):
+        write_at_template("openocd.cfg.in.j2", context, openocd_cfg, encoding="utf-8")
+
+    launch_json = os.path.join(vscode_dir, "launch.json")
+    if not os.path.exists(launch_json):
+        write_at_template("launch.json.in.j2", context, launch_json, encoding="utf-8")
+
+    tasks_json = os.path.join(vscode_dir, "tasks.json")
+    if not os.path.exists(tasks_json):
+        write_at_template("tasks.json.in.j2", context, tasks_json, encoding="utf-8")
+
+    return {
+        "openocd_cfg": openocd_cfg,
+        "launch_json": launch_json,
+        "tasks_json": tasks_json,
+        "openocd_path": openocd_path,
+        "gdb_path": gdb_path,
+        "debug_executable": debug_executable,
+        "openocd_target": openocd_target,
+        "openocd_interface": openocd_interface,
+    }
 
 
 def generate_debug_templates(project_root: str) -> None:

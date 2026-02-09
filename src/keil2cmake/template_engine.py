@@ -23,3 +23,16 @@ def write_template(name: str, context: dict[str, Any], output_path: str, encodin
     content = render_template(name, context)
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     Path(output_path).write_text(content, encoding=encoding)
+
+
+def render_at_template(name: str, context: dict[str, Any]) -> str:
+    content = (_TEMPLATE_DIR / name).read_text(encoding='utf-8')
+    for key, value in context.items():
+        content = content.replace(f"@{key}@", str(value))
+    return content
+
+
+def write_at_template(name: str, context: dict[str, Any], output_path: str, encoding: str = 'utf-8') -> None:
+    content = render_at_template(name, context)
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_path).write_text(content, encoding=encoding)

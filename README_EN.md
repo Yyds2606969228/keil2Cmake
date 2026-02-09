@@ -39,6 +39,12 @@ cmake --build --preset build
 cmake --build --preset check
 ```
 
+### 4. Generate OpenOCD/Cortex-Debug templates (existing CMake project)
+Run in your CMake project root:
+```bash
+Keil2Cmake openocd -mcu STM32F103C8 -debugger jlink
+```
+
 ## Generated Layout
 ```
 project_root/
@@ -59,6 +65,10 @@ Generated after `cmake --preset keil2cmake`:
 .vscode/tasks.json
 cmake/user/openocd.cfg
 ```
+
+For an existing CMake project, you can also run:
+```
+Keil2Cmake openocd -mcu <MCU> -debugger <daplink|jlink|stlink>
 ```
 
 ## Notes
@@ -70,6 +80,7 @@ cmake/user/openocd.cfg
 - Linker conversion: if a Keil `.sct` is provided, `cmake/internal/keil2cmake_from_sct.ld` is generated and used as the default GCC linker script (strict template conversion; please verify memory layout. If parsing fails, it falls back to the default script).
 - checkcpp args: configure `K2C_CHECKCPP_ENABLE` or switch-style `K2C_CHECKCPP_ENABLE_*` (ON/OFF) to build `--enable`, plus `K2C_CHECKCPP_JOBS` / `K2C_CHECKCPP_EXCLUDES` / `K2C_CHECKCPP_INCONCLUSIVE` in `cmake/user/keil2cmake_user.cmake`.
 - OpenOCD debug: generated after `cmake --preset keil2cmake` (`.vscode/launch.json` for cortex-debug, `.vscode/tasks.json` for download). Edit `cmake/user/openocd.cfg` to set probe/target. Manually select the probe in `CMakePresets.json` via `K2C_DEBUG_PROBE` (`daplink`/`jlink`/`stlink`); the device name is used to auto-fill a default `K2C_OPENOCD_TARGET` when possible; `OPENOCD_PATH` comes from `path.cfg`.
+- Template-only: `Keil2Cmake openocd -mcu <MCU> -debugger <daplink|jlink|stlink>` generates `.vscode/launch.json`, `.vscode/tasks.json`, and `cmake/user/openocd.cfg` in the current directory (does not overwrite existing files).
 
 ---
 

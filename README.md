@@ -39,6 +39,12 @@ cmake --build --preset build
 cmake --build --preset check
 ```
 
+### 4. 仅生成 OpenOCD/Cortex-Debug 模板（已有 CMake 工程）
+在 CMake 工程根目录执行：
+```bash
+Keil2Cmake openocd -mcu STM32F103C8 -debugger jlink
+```
+
 ## 生成文件结构
 ```
 project_root/
@@ -59,6 +65,10 @@ project_root/
 .vscode/tasks.json
 cmake/user/openocd.cfg
 ```
+
+已有 CMake 工程也可执行：
+```
+Keil2Cmake openocd -mcu <MCU> -debugger <daplink|jlink|stlink>
 ```
 
 ## 说明
@@ -70,6 +80,7 @@ cmake/user/openocd.cfg
 - 链接脚本转换：若 Keil 工程配置了 `.sct`，会生成 `cmake/internal/keil2cmake_from_sct.ld` 并作为默认 GCC 链接脚本（严格模板转换，需自行核对内存布局；解析失败会回退到默认脚本）。
 - checkcpp 参数：可在 `cmake/user/keil2cmake_user.cmake` 配置 `K2C_CHECKCPP_ENABLE` 或一组开关 `K2C_CHECKCPP_ENABLE_*`（ON/OFF）来生成 `--enable`；同时支持 `K2C_CHECKCPP_JOBS` / `K2C_CHECKCPP_EXCLUDES` / `K2C_CHECKCPP_INCONCLUSIVE`。
 - OpenOCD 调试：执行 `cmake --preset keil2cmake` 后生成 `.vscode/launch.json`（cortex-debug）和 `.vscode/tasks.json`（下载任务）；用户需在 `cmake/user/openocd.cfg` 中设置调试器与芯片配置。调试器在 `CMakePresets.json` 中通过 `K2C_DEBUG_PROBE` 手动选择（`daplink`/`jlink`/`stlink`）；芯片型号会尝试自动填充 `K2C_OPENOCD_TARGET` 默认值；`OPENOCD_PATH` 来自 `path.cfg`。
+- 仅生成模板：`Keil2Cmake openocd -mcu <MCU> -debugger <daplink|jlink|stlink>` 会在当前目录生成 `.vscode/launch.json`、`.vscode/tasks.json` 和 `cmake/user/openocd.cfg`（若已存在则不覆盖）。
 
 ---
 

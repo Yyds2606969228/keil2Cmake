@@ -23,10 +23,16 @@ from keil2cmake.compiler.armgcc.layout import (
     infer_sysroot_from_armgcc_path,
     infer_gcc_internal_includes_from_armgcc_path,
 )
-from keil2cmake.template_engine import render_template, write_template
+from keil2cmake.template_engine import render_template, write_template, write_at_template
 from keil2cmake.compiler.clangd import generate_clangd_config, _infer_gcc_toolchain_root
 from keil2cmake.compiler.presets import generate_cmake_presets
-from keil2cmake.compiler.debug import infer_openocd_target, generate_debug_templates
+from keil2cmake.compiler.debug import (
+    infer_openocd_target,
+    infer_openocd_interface,
+    generate_debug_templates,
+    generate_openocd_files,
+)
+import keil2cmake.compiler.debug as kdbg
 from keil2cmake.compiler.toolchains import generate_toolchains
 from keil2cmake.project_gen import (
     _relativize_paths,
@@ -178,6 +184,24 @@ class TestTemplateEngine(unittest.TestCase):
             out = os.path.join(td, 'openocd.cfg')
             write_template('openocd.cfg.in.j2', {}, out, encoding='utf-8')
             self.assertTrue(os.path.exists(out))
+
+    def test_write_at_template(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out = os.path.join(td, 'launch.json')
+            write_at_template(
+                'launch.json.in.j2',
+                {
+                    'K2C_OPENOCD_PATH': 'openocd',
+                    'K2C_GDB_PATH': 'arm-none-eabi-gdb',
+                    'K2C_DEBUG_EXECUTABLE': '${workspaceFolder}/build/app.elf',
+                    'K2C_OPENOCD_SEARCHDIR_JSON': '',
+                },
+                out,
+                encoding='utf-8',
+            )
+            self.assertTrue(os.path.exists(out))
+            content = Path(out).read_text(encoding='utf-8')
+            self.assertIn('openocd', content)
 
 
 class TestClangdConfig(unittest.TestCase):
@@ -352,6 +376,66 @@ class TestPresetsAndDebugTemplates(unittest.TestCase):
             debug_cmake = project_root / 'cmake' / 'internal' / 'k2c_debug.cmake'
             self.assertTrue(debug_cmake.exists())
 
+    def test_generate_openocd_files(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = os.path.join(td, 'path.cfg')
+            os.environ['KEIL2CMAKE_CONFIG_PATH'] = cfg
+            project_root = Path(td) / 'proj'
+            project_root.mkdir(parents=True, exist_ok=True)
+
+            result = generate_openocd_files(str(project_root), 'STM32F103C8', 'jlink')
+            self.assertTrue(Path(result['openocd_cfg']).exists())
+            cfg_text = Path(result['openocd_cfg']).read_text(encoding='utf-8')
+            self.assertIn('interface/jlink.cfg', cfg_text)
+            self.assertIn('target/stm32f1x.cfg', cfg_text)
+
+            launch_text = Path(result['launch_json']).read_text(encoding='utf-8')
+            self.assertIn('cortex-debug', launch_text)
+
+    def test_generate_openocd_files_no_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = os.path.join(td, 'path.cfg')
+            os.environ['KEIL2CMAKE_CONFIG_PATH'] = cfg
+            project_root = Path(td) / 'proj'
+            vscode_dir = project_root / '.vscode'
+            user_dir = project_root / 'cmake' / 'user'
+            vscode_dir.mkdir(parents=True, exist_ok=True)
+            user_dir.mkdir(parents=True, exist_ok=True)
+
+            custom_launch = vscode_dir / 'launch.json'
+            custom_tasks = vscode_dir / 'tasks.json'
+            custom_cfg = user_dir / 'openocd.cfg'
+            custom_launch.write_text('CUSTOM_LAUNCH', encoding='utf-8')
+            custom_tasks.write_text('CUSTOM_TASKS', encoding='utf-8')
+            custom_cfg.write_text('CUSTOM_CFG', encoding='utf-8')
+
+            generate_openocd_files(str(project_root), 'STM32F103C8', 'daplink')
+            self.assertEqual(custom_launch.read_text(encoding='utf-8'), 'CUSTOM_LAUNCH')
+            self.assertEqual(custom_tasks.read_text(encoding='utf-8'), 'CUSTOM_TASKS')
+            self.assertEqual(custom_cfg.read_text(encoding='utf-8'), 'CUSTOM_CFG')
+
+
+class TestOpenOcdHelpers(unittest.TestCase):
+    def test_infer_openocd_target_unknown(self) -> None:
+        self.assertEqual(infer_openocd_target('UNKNOWN123'), '')
+
+    def test_infer_openocd_interface(self) -> None:
+        self.assertEqual(infer_openocd_interface('jlink'), 'interface/jlink.cfg')
+        self.assertEqual(infer_openocd_interface('stlink'), 'interface/stlink.cfg')
+        self.assertEqual(infer_openocd_interface('daplink'), 'interface/cmsis-dap.cfg')
+        self.assertEqual(infer_openocd_interface('unknown'), '')
+
+    def test_infer_gdb_path_from_armgcc(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            bin_dir = Path(td) / 'bin'
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            gcc_exe = bin_dir / ('arm-none-eabi-gcc.exe' if os.name == 'nt' else 'arm-none-eabi-gcc')
+            gcc_exe.write_text('stub', encoding='utf-8')
+            gdb_path = kdbg._infer_gdb_path(str(gcc_exe))
+            if os.name == 'nt':
+                self.assertTrue(gdb_path.endswith('arm-none-eabi-gdb.exe'))
+            else:
+                self.assertTrue(gdb_path.endswith('arm-none-eabi-gdb'))
 
 class TestUvprojxAndCli(unittest.TestCase):
     def _write_uvprojx(self, path: str, use_ac6: str) -> None:
@@ -428,6 +512,20 @@ class TestUvprojxAndCli(unittest.TestCase):
             self.assertEqual(ret, 0)
             self.assertTrue(os.path.exists(os.path.join(out_dir, 'CMakeLists.txt')))
             self.assertTrue(os.path.exists(os.path.join(out_dir, 'cmake', 'internal', 'k2c_debug.cmake')))
+
+    def test_cli_openocd(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = os.path.join(td, 'path.cfg')
+            os.environ['KEIL2CMAKE_CONFIG_PATH'] = cfg
+            cwd = os.getcwd()
+            try:
+                os.chdir(td)
+                ret = cli_main(['openocd', '-mcu', 'STM32F103C8', '-debugger', 'daplink'])
+                self.assertEqual(ret, 0)
+                self.assertTrue(os.path.exists(os.path.join(td, '.vscode', 'launch.json')))
+                self.assertTrue(os.path.exists(os.path.join(td, 'cmake', 'user', 'openocd.cfg')))
+            finally:
+                os.chdir(cwd)
 
 
 class TestToolchains(unittest.TestCase):
