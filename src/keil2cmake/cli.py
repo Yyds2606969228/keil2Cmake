@@ -12,6 +12,7 @@ from .compiler.toolchains import generate_toolchains
 from .compiler.presets import generate_cmake_presets
 from .compiler.clangd import generate_clangd_config
 from .compiler.debug import generate_debug_templates, generate_openocd_files
+from .tinyml import generate_tinyml_project
 from .i18n import set_language, t
 
 
@@ -48,6 +49,47 @@ def build_openocd_parser() -> argparse.ArgumentParser:
         required=True,
         choices=['daplink', 'jlink', 'stlink'],
         help='Debugger probe: daplink/jlink/stlink',
+    )
+    return parser
+
+
+def build_onnx_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description='Generate TinyML artifacts from ONNX models',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''Examples:
+  %(prog)s --model model.onnx --backend c --quant int8
+        '''
+    )
+    parser.add_argument('--model', required=True, help='Path to ONNX model')
+    parser.add_argument(
+        '--backend',
+        default='c',
+        choices=['c', 'cmsis-nn'],
+        help='Backend selection',
+    )
+    parser.add_argument(
+        '--quant',
+        default='int8',
+        choices=['fp32', 'int8', 'int16'],
+        help='Quantization type',
+    )
+    parser.add_argument(
+        '--weights',
+        default='flash',
+        choices=['flash', 'ram'],
+        help='Weight storage location',
+    )
+    parser.add_argument(
+        '--emit',
+        default='c',
+        choices=['c', 'lib'],
+        help='Emit C source or static library',
+    )
+    parser.add_argument(
+        '--output',
+        default='./onnx-for-mcu',
+        help='Output root directory',
     )
     return parser
 
@@ -121,9 +163,63 @@ def _main_openocd(argv) -> int:
     return 0
 
 
+def _main_onnx(argv) -> int:
+    parser = build_onnx_parser()
+    args = parser.parse_args(argv)
+
+    set_language(get_language())
+    if not os.path.exists(args.model):
+        print(t('cli.error.file_not_found', path=args.model))
+        return 1
+
+    result = generate_tinyml_project(
+        args.model,
+        args.output,
+        args.backend,
+        args.quant,
+        args.weights,
+        args.emit,
+    )
+
+    print('\n' + t('cli.onnx.done'))
+    print(f"  {t('cli.onnx.summary.model')}: {result['model_name']}")
+    print(f"  {t('cli.onnx.summary.output')}: {os.path.abspath(result['project_dir'])}")
+    print(f"  {t('cli.onnx.summary.backend')}: {result['backend']}")
+    print(f"  {t('cli.onnx.summary.quant')}: {result['quant']}")
+    print(f"  {t('cli.onnx.summary.weights')}: {result['weights']}")
+    print(f"  {t('cli.onnx.summary.emit')}: {args.emit}")
+    print(f"  {t('cli.onnx.summary.header')}: {result['header']}")
+    print(f"  {t('cli.onnx.summary.source')}: {result['source']}")
+    print(f"  {t('cli.onnx.summary.manifest')}: {result['manifest']}")
+    if result.get('library'):
+        print(f"  {t('cli.onnx.summary.library')}: {result['library']}")
+    validation = result.get("validation")
+    if validation is not None:
+        status_map = {
+            "passed": t("cli.onnx.validation.passed"),
+            "skipped": t("cli.onnx.validation.skipped"),
+            "failed": t("cli.onnx.validation.failed"),
+        }
+        status_label = status_map.get(getattr(validation, "status", ""), str(getattr(validation, "status", "")))
+        detail = getattr(validation, "reason", "") or ""
+        engine = getattr(validation, "engine", "") or ""
+        extras = []
+        if engine:
+            extras.append(engine)
+        if detail:
+            extras.append(detail)
+        if extras:
+            print(f"  {t('cli.onnx.summary.validation')}: {status_label} ({'; '.join(extras)})")
+        else:
+            print(f"  {t('cli.onnx.summary.validation')}: {status_label}")
+    return 0
+
+
 def main(argv=None) -> int:
     if argv is None:
         argv = sys.argv[1:]
     if argv and argv[0] == 'openocd':
         return _main_openocd(argv[1:])
+    if argv and argv[0] == 'onnx':
+        return _main_onnx(argv[1:])
     return _main_convert(argv)

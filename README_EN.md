@@ -45,6 +45,26 @@ Run in your CMake project root:
 Keil2Cmake openocd -mcu STM32F103C8 -debugger jlink
 ```
 
+### 5. TinyML (ONNX -> C/static lib)
+```bash
+Keil2Cmake onnx --model model.onnx --backend c --quant int8 --weights flash --emit c
+```
+Generate ONNX Opset12 coverage matrix:
+```bash
+uv run --with onnx python scripts/generate_opset12_coverage.py
+```
+Output file: `docs/onnx_opset12_coverage_matrix.md`
+
+Supported ops: Add/Sub/Mul/Div/Max/Min/Pow (common broadcast), Equal/Greater/Less/GreaterOrEqual/LessOrEqual, And/Or/Xor/Not, ArgMax/ArgMin, Abs/Neg/Exp/Erf/Sign/Sin/Cos/Log/Reciprocal/Sqrt/Floor/Ceil/Round, Relu/LeakyRelu/Elu/Selu/HardSigmoid/Sigmoid/Tanh/Softplus/Softsign/Clip, MatMul/Gemm, Softmax (static rank>=1), Reshape/Flatten/Squeeze/Unsqueeze/Identity/Cast/Gather/GatherND/GatherElements/ScatterElements/ScatterND/Expand/Where/Tile/Resize, Conv (2D/NCHW)/ConvTranspose (2D/NCHW, group=1, fp32), MaxPool/AveragePool, GlobalAveragePool/GlobalMaxPool, BatchNormalization/InstanceNormalization/LRN, Concat, Transpose, Pad (constant), Slice, ReduceMean/ReduceSum/ReduceMax/ReduceMin/ReduceProd/ReduceL1/ReduceL2/ReduceSumSquare (axes/keepdims supported), SpaceToDepth/DepthToSpace.
+Supported backends: `backend=c` and `backend=cmsis-nn` (ESP-NN is deferred). CLI default is `quant=int8`; `quant` supports `fp32/int8/int16`. `int8/int16` requires Q/DQ (QuantizeLinear/DequantizeLinear) nodes; quantized compute covers `Cast/Gather/GatherND/GatherElements/ScatterElements/ScatterND/Expand/Where/Tile/Resize/SpaceToDepth/DepthToSpace/Add/Sub/Mul/Div/Relu/LeakyRelu/Elu/Selu/HardSigmoid/Sigmoid/Tanh/Softplus/Softsign/Exp/Erf/Sign/Sin/Cos/Log/Reciprocal/Sqrt/Floor/Ceil/Round/Pow/Identity/Abs/Neg/Clip/Max/Min/Conv/MatMul/Gemm/MaxPool/AveragePool/GlobalAveragePool/GlobalMaxPool/Squeeze/Unsqueeze/ReduceProd/ReduceL1/ReduceL2/ReduceSumSquare`. With `backend=cmsis-nn`, operators first try CMSIS-NN, then fallback to pure C; if pure C also lacks support, conversion fails.
+Consistency checks run during conversion (based on ONNX ReferenceEvaluator; default tolerances `rtol=1e-3`, `atol=1e-4`); if unsupported or too large, validation is skipped.
+To enable generated-C consistency regression on Windows, inject host GCC before running tests (session-only; do not write this into `path.cfg`):
+```powershell
+$env:CC = "C:/Users/qwer/Downloads/winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64ucrt-13.0.0-r5/mingw64/bin/gcc.exe"
+$env:PATH = "C:/Users/qwer/Downloads/winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64ucrt-13.0.0-r5/mingw64/bin;$env:PATH"
+uv run --with jinja2 --with onnx --with numpy --with onnxruntime python -m unittest tests.test_tinyml -v
+```
+
 ## Generated Layout
 ```
 project_root/

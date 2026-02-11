@@ -1,0 +1,49 @@
+{
+  "name": "group_conv",
+  "opset": 13,
+  "backend": "c",
+  "quant": "fp32",
+  "inputs": [
+    "input"
+  ],
+  "outputs": [
+    "output"
+  ],
+  "input_shapes": {
+    "input": [
+      1,
+      4,
+      4,
+      4
+    ]
+  },
+  "output_shapes": {
+    "output": [
+      1,
+      6,
+      2,
+      2
+    ]
+  },
+  "input_dtypes": {
+    "input": "float32"
+  },
+  "output_dtypes": {
+    "output": "float32"
+  },
+  "ops": [
+    "Conv"
+  ],
+  "arena_bytes": 0,
+  "weights": "flash",
+  "op_backends": [
+    {
+      "op": "Conv",
+      "backend": "c"
+    }
+  ],
+  "backend_stats": {
+    "c": 1
+  },
+  "fallback_stats": {}
+}

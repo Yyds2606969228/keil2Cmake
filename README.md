@@ -45,6 +45,26 @@ cmake --build --preset check
 Keil2Cmake openocd -mcu STM32F103C8 -debugger jlink
 ```
 
+### 5. TinyML（ONNX -> C/静态库）
+```bash
+Keil2Cmake onnx --model model.onnx --backend c --quant int8 --weights flash --emit c
+```
+生成 ONNX Opset12 覆盖矩阵：
+```bash
+uv run --with onnx python scripts/generate_opset12_coverage.py
+```
+输出文件：`docs/onnx_opset12_coverage_matrix.md`
+
+已支持算子：Add/Sub/Mul/Div/Max/Min/Pow（含常见广播）、Equal/Greater/Less/GreaterOrEqual/LessOrEqual、And/Or/Xor/Not、ArgMax/ArgMin、Abs/Neg/Exp/Erf/Sign/Sin/Cos/Log/Reciprocal/Sqrt/Floor/Ceil/Round、Relu/LeakyRelu/Elu/Selu/HardSigmoid/Sigmoid/Tanh/Softplus/Softsign/Clip、MatMul/Gemm、Softmax(静态 rank>=1)、Reshape/Flatten/Squeeze/Unsqueeze/Identity/Cast/Gather/GatherND/GatherElements/ScatterElements/ScatterND/Expand/Where/Tile/Resize、Conv(2D/NCHW)/ConvTranspose(2D/NCHW, group=1, fp32)、MaxPool/AveragePool、GlobalAveragePool/GlobalMaxPool、BatchNormalization/InstanceNormalization/LRN、Concat、Transpose、Pad(constant)、Slice、ReduceMean/ReduceSum/ReduceMax/ReduceMin/ReduceProd/ReduceL1/ReduceL2/ReduceSumSquare（支持 axes/keepdims）、SpaceToDepth/DepthToSpace。
+当前支持 `backend=c` 与 `backend=cmsis-nn`（暂不集成 ESP-NN）；CLI 默认 `quant=int8`，`quant` 支持 `fp32/int8/int16`。`int8/int16` 需模型使用 Q/DQ（QuantizeLinear/DequantizeLinear）节点；目前量化计算覆盖 `Cast/Gather/GatherND/GatherElements/ScatterElements/ScatterND/Expand/Where/Tile/Resize/SpaceToDepth/DepthToSpace/Add/Sub/Mul/Div/Relu/LeakyRelu/Elu/Selu/HardSigmoid/Sigmoid/Tanh/Softplus/Softsign/Exp/Erf/Sign/Sin/Cos/Log/Reciprocal/Sqrt/Floor/Ceil/Round/Pow/Identity/Abs/Neg/Clip/Max/Min/Conv/MatMul/Gemm/MaxPool/AveragePool/GlobalAveragePool/GlobalMaxPool/Squeeze/Unsqueeze/ReduceProd/ReduceL1/ReduceL2/ReduceSumSquare`。当 `backend=cmsis-nn` 时，算子优先命中 CMSIS-NN，不支持则回退纯 C；若纯 C 也不支持则报错。
+转换阶段默认执行一致性校验（基于 ONNX ReferenceEvaluator；默认容差 `rtol=1e-3`、`atol=1e-4`，环境不支持或模型超限将自动跳过）。
+如需在 Windows 上启用“生成 C 代码后再运行比对”的一致性回归，请在执行测试前注入宿主机 GCC（仅作用于当前终端会话，不写入 `path.cfg`）：
+```powershell
+$env:CC = "C:/Users/qwer/Downloads/winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64ucrt-13.0.0-r5/mingw64/bin/gcc.exe"
+$env:PATH = "C:/Users/qwer/Downloads/winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64ucrt-13.0.0-r5/mingw64/bin;$env:PATH"
+uv run --with jinja2 --with onnx --with numpy --with onnxruntime python -m unittest tests.test_tinyml -v
+```
+
 ## 生成文件结构
 ```
 project_root/

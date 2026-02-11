@@ -45,7 +45,7 @@ from keil2cmake.project_gen import (
 )
 from keil2cmake.keil import scatter as sc
 from keil2cmake.keil.uvprojx import parse_uvprojx
-from keil2cmake.cli import main as cli_main
+from keil2cmake.cli import main as cli_main, build_onnx_parser
 
 
 class TestCommonUtilities(unittest.TestCase):
@@ -526,6 +526,14 @@ class TestUvprojxAndCli(unittest.TestCase):
                 self.assertTrue(os.path.exists(os.path.join(td, 'cmake', 'user', 'openocd.cfg')))
             finally:
                 os.chdir(cwd)
+
+    def test_cli_onnx_parser_defaults(self) -> None:
+        parser = build_onnx_parser()
+        args = parser.parse_args(['--model', 'model.onnx'])
+        self.assertEqual(args.backend, 'c')
+        self.assertEqual(args.quant, 'int8')
+        with self.assertRaises(SystemExit):
+            parser.parse_args(['--model', 'model.onnx', '--backend', 'esp-nn'])
 
 
 class TestToolchains(unittest.TestCase):
