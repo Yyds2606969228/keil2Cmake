@@ -1,0 +1,17 @@
+{{ header_title }}
+{{ header_safe }}
+{{ header_no_overwrite }}
+
+set(K2C_CHECKCPP "" CACHE FILEPATH "checkcpp executable")
+set(K2C_CHECKCPP_JOBS "" CACHE STRING "cppcheck -j <N>")
+set(K2C_CHECKCPP_EXCLUDES "" CACHE STRING "cppcheck --exclude list (CMake list: a;b;c)")
+set(K2C_CHECKCPP_ENABLE "" CACHE STRING "cppcheck --enable=<ids>, comma-separated (override switches)")
+set(K2C_CHECKCPP_ENABLE_ALL OFF CACHE BOOL "cppcheck --enable=all")
+set(K2C_CHECKCPP_ENABLE_WARNING OFF CACHE BOOL "cppcheck --enable=warning")
+set(K2C_CHECKCPP_ENABLE_STYLE OFF CACHE BOOL "cppcheck --enable=style")
+set(K2C_CHECKCPP_ENABLE_PERFORMANCE OFF CACHE BOOL "cppcheck --enable=performance")
+set(K2C_CHECKCPP_ENABLE_PORTABILITY OFF CACHE BOOL "cppcheck --enable=portability")
+set(K2C_CHECKCPP_ENABLE_INFORMATION OFF CACHE BOOL "cppcheck --enable=information")
+set(K2C_CHECKCPP_ENABLE_UNUSED_FUNCTION OFF CACHE BOOL "cppcheck --enable=unusedFunction")
+set(K2C_CHECKCPP_ENABLE_MISSING_INCLUDE OFF CACHE BOOL "cppcheck --enable=missingInclude")
+set(K2C_CHECKCPP_INCONCLUSIVE OFF CACHE BOOL "cppcheck --inconclusive")

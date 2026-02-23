@@ -50,6 +50,11 @@ def build_openocd_parser() -> argparse.ArgumentParser:
         choices=['daplink', 'jlink', 'stlink'],
         help='Debugger probe: daplink/jlink/stlink',
     )
+    parser.add_argument(
+        '--overwrite',
+        action='store_true',
+        help='Overwrite existing openocd.cfg/launch.json/tasks.json',
+    )
     return parser
 
 
@@ -58,22 +63,10 @@ def build_onnx_parser() -> argparse.ArgumentParser:
         description='Generate TinyML artifacts from ONNX models',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''Examples:
-  %(prog)s --model model.onnx --backend c --quant int8
+  %(prog)s --model model.onnx --weights flash --emit c
         '''
     )
     parser.add_argument('--model', required=True, help='Path to ONNX model')
-    parser.add_argument(
-        '--backend',
-        default='c',
-        choices=['c', 'cmsis-nn'],
-        help='Backend selection',
-    )
-    parser.add_argument(
-        '--quant',
-        default='int8',
-        choices=['fp32', 'int8', 'int16'],
-        help='Quantization type',
-    )
     parser.add_argument(
         '--weights',
         default='flash',
@@ -117,6 +110,12 @@ def _main_convert(argv) -> int:
         project_data.get('use_microlib'),
     )
     generate_debug_templates(project_root)
+    generate_openocd_files(
+        project_root,
+        project_data.get('device', ''),
+        project_data.get('debugger', ''),
+        overwrite=False,
+    )
 
     print('\n' + t('cli.done'))
     print(f"  {t('cli.summary.project')}: {project_data['project_name']}")
@@ -144,7 +143,8 @@ def _main_openocd(argv) -> int:
     args = parser.parse_args(argv)
 
     set_language(get_language())
-    result = generate_openocd_files(os.getcwd(), args.mcu, args.debugger)
+    generate_debug_templates(os.getcwd())
+    result = generate_openocd_files(os.getcwd(), args.mcu, args.debugger, overwrite=args.overwrite)
 
     print('\n' + t('cli.openocd.done'))
     print(f"  {t('cli.summary.device')}: {args.mcu}")
@@ -175,8 +175,6 @@ def _main_onnx(argv) -> int:
     result = generate_tinyml_project(
         args.model,
         args.output,
-        args.backend,
-        args.quant,
         args.weights,
         args.emit,
     )
@@ -185,7 +183,6 @@ def _main_onnx(argv) -> int:
     print(f"  {t('cli.onnx.summary.model')}: {result['model_name']}")
     print(f"  {t('cli.onnx.summary.output')}: {os.path.abspath(result['project_dir'])}")
     print(f"  {t('cli.onnx.summary.backend')}: {result['backend']}")
-    print(f"  {t('cli.onnx.summary.quant')}: {result['quant']}")
     print(f"  {t('cli.onnx.summary.weights')}: {result['weights']}")
     print(f"  {t('cli.onnx.summary.emit')}: {args.emit}")
     print(f"  {t('cli.onnx.summary.header')}: {result['header']}")

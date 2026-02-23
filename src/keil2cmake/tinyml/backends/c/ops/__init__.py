@@ -142,5 +142,31 @@ from . import einsum  # noqa: F401
 from . import thresholded_relu  # noqa: F401
 from . import shrink  # noqa: F401
 from . import eyelike  # noqa: F401
+from . import random_uniform  # noqa: F401
+from . import random_uniform_like  # noqa: F401
+from . import random_normal  # noqa: F401
+from . import random_normal_like  # noqa: F401
+from . import multinomial  # noqa: F401
+from . import unique  # noqa: F401
+from . import negative_log_likelihood_loss  # noqa: F401
+from . import softmax_cross_entropy_loss  # noqa: F401
+from . import max_roi_pool  # noqa: F401
+from . import max_unpool  # noqa: F401
+from . import rnn  # noqa: F401
+from . import gru  # noqa: F401
+from . import lstm  # noqa: F401
+from . import if_op  # noqa: F401
+from . import loop  # noqa: F401
+from . import scan  # noqa: F401
+from . import sequence_construct  # noqa: F401
+from . import sequence_empty  # noqa: F401
+from . import sequence_at  # noqa: F401
+from . import sequence_insert  # noqa: F401
+from . import sequence_erase  # noqa: F401
+from . import sequence_length  # noqa: F401
+from . import split_to_sequence  # noqa: F401
+from . import concat_from_sequence  # noqa: F401
+from . import string_normalizer  # noqa: F401
+from . import tfidf_vectorizer  # noqa: F401
 
 __all__ = ["get_handler", "EmitContext"]

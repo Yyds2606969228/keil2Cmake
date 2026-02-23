@@ -1,6 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from PyInstaller.utils.hooks import Tree
 
 block_cipher = None
 
@@ -8,7 +7,7 @@ a = Analysis(
     ['scripts/Keil2Cmake.py'],
     pathex=['src'],
     binaries=[],
-    datas=[Tree('src/keil2cmake/templates', prefix='keil2cmake/templates')],
+    datas=[('src/keil2cmake/templates', 'keil2cmake/templates')],
     hiddenimports=[
         'keil2cmake.cli',
         'keil2cmake.common',
@@ -48,7 +47,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['tkinter', 'matplotlib', 'numpy', 'pandas'],
+    excludes=['tkinter', 'matplotlib', 'pandas'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -71,7 +70,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

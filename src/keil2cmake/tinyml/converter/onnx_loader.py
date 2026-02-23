@@ -1907,8 +1907,8 @@ def load_onnx_model(path: str) -> ModelIR:
         if _is_initializer(inp.name, initializer_names):
             continue
         dtype = _dtype_from_tensorproto(_tensor_dtype(inp))
-        if dtype not in ("float32", "uint8", "int8", "int16"):
-            raise ValueError("Only FLOAT/UINT8/INT8/INT16 inputs are supported in this version.")
+        if dtype not in ("float32", "uint8", "int8", "int16", "bool", "int32", "int64"):
+            raise ValueError("Only FLOAT/UINT8/INT8/INT16/BOOL/INT32/INT64 inputs are supported in this version.")
         shape = _shape_from_value(inp)
         _tensor_size(shape)
         tensor = TensorInfo(name=inp.name, shape=shape, dtype=dtype)

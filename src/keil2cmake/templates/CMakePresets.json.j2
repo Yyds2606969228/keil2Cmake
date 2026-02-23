@@ -16,12 +16,11 @@
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/internal/toolchain.cmake",
         "K2C_CHECKCPP": "{{ checkcpp_path }}",
         "K2C_OPENOCD_PATH": "{{ openocd_path }}",
-        "K2C_DEBUG_PROBE": "{{ debug_probe }}",
         "K2C_OPENOCD_TARGET": "{{ openocd_target }}",
-        "K2C_OPENOCD_INTERFACE": "",
-        "K2C_OPENOCD_BOARD": "",
-        "K2C_OPENOCD_SCRIPTS": ""{% if cmake_make_program %},{% endif %}
-{% if cmake_make_program %}        "CMAKE_MAKE_PROGRAM": "{{ cmake_make_program }}"
+        "K2C_OPENOCD_INTERFACE": "{{ openocd_interface }}",
+        "K2C_OPENOCD_TRANSPORT": "{{ openocd_transport }}"{% if cmake_make_program %},{% endif %}
+{% if cmake_make_program %}        
+        "CMAKE_MAKE_PROGRAM": "{{ cmake_make_program }}"
 {% endif %}      }
     }
   ],

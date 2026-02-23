@@ -29,7 +29,7 @@ from keil2cmake.compiler.presets import generate_cmake_presets
 from keil2cmake.compiler.debug import (
     infer_openocd_target,
     infer_openocd_interface,
-    generate_debug_templates,
+    infer_openocd_transport,
     generate_openocd_files,
 )
 import keil2cmake.compiler.debug as kdbg
@@ -319,6 +319,7 @@ class TestProjectGenInternals(unittest.TestCase):
             root.mkdir(parents=True, exist_ok=True)
             generate_cmake_structure(data, str(root))
             self.assertTrue((root / 'CMakeLists.txt').exists())
+            self.assertTrue((root / 'cmake' / 'user' / 'cppcheck.cmake').exists())
 
             # create additional files to be cleaned
             (root / 'CMakePresets.json').write_text('{}', encoding='utf-8')
@@ -336,6 +337,7 @@ class TestProjectGenInternals(unittest.TestCase):
             self.assertFalse((root / 'CMakeLists.txt').exists())
             self.assertFalse((root / 'CMakePresets.json').exists())
             self.assertFalse((vscode / 'launch.json').exists())
+            self.assertFalse((root / 'cmake' / 'user' / 'cppcheck.cmake').exists())
 
             # clean empty project (no files)
             clean_generated(str(root))
@@ -369,12 +371,34 @@ class TestPresetsAndDebugTemplates(unittest.TestCase):
 
             generate_cmake_presets(str(project_root), {'device': 'STM32F103C8'})
             presets = (project_root / 'CMakePresets.json').read_text(encoding='utf-8')
+            self.assertIn('K2C_CHECKCPP', presets)
             self.assertIn('K2C_OPENOCD_PATH', presets)
+            self.assertIn('K2C_OPENOCD_TARGET', presets)
+            self.assertIn('K2C_OPENOCD_INTERFACE', presets)
+            self.assertIn('K2C_OPENOCD_TRANSPORT', presets)
             self.assertIn('target/stm32f1x.cfg', presets)
+            self.assertNotIn('K2C_DEBUG_PROBE', presets)
 
-            generate_debug_templates(str(project_root))
-            debug_cmake = project_root / 'cmake' / 'internal' / 'k2c_debug.cmake'
-            self.assertTrue(debug_cmake.exists())
+            result = generate_openocd_files(str(project_root), 'STM32F103C8', '')
+            self.assertTrue(Path(result['openocd_cfg']).exists())
+            self.assertTrue(Path(result['launch_json']).exists())
+            self.assertTrue(Path(result['tasks_json']).exists())
+
+    def test_generate_presets_with_debugger_default_interface(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = os.path.join(td, 'path.cfg')
+            os.environ['KEIL2CMAKE_CONFIG_PATH'] = cfg
+            project_root = Path(td) / 'proj'
+            project_root.mkdir(parents=True, exist_ok=True)
+
+            generate_cmake_presets(
+                str(project_root),
+                {'device': 'STM32F103C8', 'debugger': 'stlink'},
+            )
+            presets = (project_root / 'CMakePresets.json').read_text(encoding='utf-8')
+            self.assertIn('target/stm32f1x.cfg', presets)
+            self.assertIn('interface/stlink.cfg', presets)
+            self.assertIn('"K2C_OPENOCD_TRANSPORT": "hla_swd"', presets)
 
     def test_generate_openocd_files(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -388,6 +412,7 @@ class TestPresetsAndDebugTemplates(unittest.TestCase):
             cfg_text = Path(result['openocd_cfg']).read_text(encoding='utf-8')
             self.assertIn('interface/jlink.cfg', cfg_text)
             self.assertIn('target/stm32f1x.cfg', cfg_text)
+            self.assertIn('transport select swd', cfg_text)
 
             launch_text = Path(result['launch_json']).read_text(encoding='utf-8')
             self.assertIn('cortex-debug', launch_text)
@@ -414,6 +439,34 @@ class TestPresetsAndDebugTemplates(unittest.TestCase):
             self.assertEqual(custom_tasks.read_text(encoding='utf-8'), 'CUSTOM_TASKS')
             self.assertEqual(custom_cfg.read_text(encoding='utf-8'), 'CUSTOM_CFG')
 
+    def test_generate_openocd_files_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = os.path.join(td, 'path.cfg')
+            os.environ['KEIL2CMAKE_CONFIG_PATH'] = cfg
+            project_root = Path(td) / 'proj'
+            vscode_dir = project_root / '.vscode'
+            user_dir = project_root / 'cmake' / 'user'
+            vscode_dir.mkdir(parents=True, exist_ok=True)
+            user_dir.mkdir(parents=True, exist_ok=True)
+
+            custom_launch = vscode_dir / 'launch.json'
+            custom_tasks = vscode_dir / 'tasks.json'
+            custom_cfg = user_dir / 'openocd.cfg'
+            custom_launch.write_text('CUSTOM_LAUNCH', encoding='utf-8')
+            custom_tasks.write_text('CUSTOM_TASKS', encoding='utf-8')
+            custom_cfg.write_text('CUSTOM_CFG', encoding='utf-8')
+
+            generate_openocd_files(str(project_root), 'STM32F103C8', 'jlink', overwrite=True)
+            self.assertIn('cortex-debug', custom_launch.read_text(encoding='utf-8'))
+            self.assertIn(
+                'program ${workspaceFolder}/build/${workspaceFolderBasename}.elf verify reset exit',
+                custom_tasks.read_text(encoding='utf-8'),
+            )
+            cfg_text = custom_cfg.read_text(encoding='utf-8')
+            self.assertIn('interface/jlink.cfg', cfg_text)
+            self.assertIn('target/stm32f1x.cfg', cfg_text)
+            self.assertIn('transport select swd', cfg_text)
+
 
 class TestOpenOcdHelpers(unittest.TestCase):
     def test_infer_openocd_target_unknown(self) -> None:
@@ -424,6 +477,12 @@ class TestOpenOcdHelpers(unittest.TestCase):
         self.assertEqual(infer_openocd_interface('stlink'), 'interface/stlink.cfg')
         self.assertEqual(infer_openocd_interface('daplink'), 'interface/cmsis-dap.cfg')
         self.assertEqual(infer_openocd_interface('unknown'), '')
+
+    def test_infer_openocd_transport(self) -> None:
+        self.assertEqual(infer_openocd_transport('jlink'), 'swd')
+        self.assertEqual(infer_openocd_transport('stlink'), 'hla_swd')
+        self.assertEqual(infer_openocd_transport('daplink'), 'swd')
+        self.assertEqual(infer_openocd_transport('unknown'), '')
 
     def test_infer_gdb_path_from_armgcc(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -438,7 +497,10 @@ class TestOpenOcdHelpers(unittest.TestCase):
                 self.assertTrue(gdb_path.endswith('arm-none-eabi-gdb'))
 
 class TestUvprojxAndCli(unittest.TestCase):
-    def _write_uvprojx(self, path: str, use_ac6: str) -> None:
+    def _write_uvprojx(self, path: str, use_ac6: str, pmon: str = '') -> None:
+        debug_opt = ''
+        if pmon:
+            debug_opt = f'<DebugOpt><pMon>{pmon}</pMon></DebugOpt>'
         xml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Project>
   <Targets>
@@ -470,6 +532,7 @@ class TestUvprojxAndCli(unittest.TestCase):
             </VariousControls>
           </LDads>
         </TargetArmAds>
+        {debug_opt}
       </TargetOption>
       <Groups>
         <Group>
@@ -496,6 +559,25 @@ class TestUvprojxAndCli(unittest.TestCase):
             self.assertIn('main.c', data.get('source_files', []))
             self.assertIn('USE_HAL', data.get('defines', []))
 
+    def test_parse_uvprojx_debugger_from_project(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            uvprojx = os.path.join(td, 'demo.uvprojx')
+            self._write_uvprojx(uvprojx, '1', pmon='STLink\\ST-LINKIII-KEIL_SWO.dll')
+            data = parse_uvprojx(uvprojx)
+            self.assertEqual(data.get('debugger'), 'stlink')
+
+    def test_parse_uvprojx_debugger_from_uvoptx(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            uvprojx = os.path.join(td, 'demo.uvprojx')
+            uvoptx = os.path.join(td, 'demo.uvoptx')
+            self._write_uvprojx(uvprojx, '1')
+            Path(uvoptx).write_text(
+                '<ProjectOpt><DebugOpt><pMon>Segger\\JL2CM3.dll</pMon></DebugOpt></ProjectOpt>',
+                encoding='utf-8',
+            )
+            data = parse_uvprojx(uvprojx)
+            self.assertEqual(data.get('debugger'), 'jlink')
+
     def test_cli_main_success_and_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = os.path.join(td, 'path.cfg')
@@ -511,7 +593,9 @@ class TestUvprojxAndCli(unittest.TestCase):
             ret = cli_main([uvprojx, '-o', out_dir])
             self.assertEqual(ret, 0)
             self.assertTrue(os.path.exists(os.path.join(out_dir, 'CMakeLists.txt')))
-            self.assertTrue(os.path.exists(os.path.join(out_dir, 'cmake', 'internal', 'k2c_debug.cmake')))
+            self.assertTrue(os.path.exists(os.path.join(out_dir, 'cmake', 'user', 'openocd.cfg')))
+            self.assertTrue(os.path.exists(os.path.join(out_dir, '.vscode', 'launch.json')))
+            self.assertTrue(os.path.exists(os.path.join(out_dir, '.vscode', 'tasks.json')))
 
     def test_cli_openocd(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -530,10 +614,12 @@ class TestUvprojxAndCli(unittest.TestCase):
     def test_cli_onnx_parser_defaults(self) -> None:
         parser = build_onnx_parser()
         args = parser.parse_args(['--model', 'model.onnx'])
-        self.assertEqual(args.backend, 'c')
-        self.assertEqual(args.quant, 'int8')
+        self.assertEqual(args.weights, 'flash')
+        self.assertEqual(args.emit, 'c')
         with self.assertRaises(SystemExit):
             parser.parse_args(['--model', 'model.onnx', '--backend', 'esp-nn'])
+        with self.assertRaises(SystemExit):
+            parser.parse_args(['--model', 'model.onnx', '--quant', 'int8'])
 
 
 class TestToolchains(unittest.TestCase):

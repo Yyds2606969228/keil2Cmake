@@ -52,6 +52,20 @@ def infer_openocd_interface(debugger: str) -> str:
     return mapping.get(dbg, "")
 
 
+def infer_openocd_transport(debugger: str) -> str:
+    if not debugger:
+        return ""
+    dbg = str(debugger).strip().lower()
+    mapping = {
+        # ST-Link uses HLA transport naming in OpenOCD scripts.
+        "stlink": "hla_swd",
+        # For Cortex-M, SWD is the common default for J-Link/CMSIS-DAP.
+        "jlink": "swd",
+        "daplink": "swd",
+    }
+    return mapping.get(dbg, "")
+
+
 def _normalize_json_path(path: str) -> str:
     return str(path).replace("\\", "/") if path else ""
 
@@ -73,7 +87,12 @@ def _infer_gdb_path(armgcc_path: str) -> str:
     return os.path.join(bin_dir, exe)
 
 
-def generate_openocd_files(project_root: str, mcu: str, debugger: str) -> dict[str, str]:
+def generate_openocd_files(
+    project_root: str,
+    mcu: str = "",
+    debugger: str = "",
+    overwrite: bool = False,
+) -> dict[str, str]:
     """Generate cortex-debug launch/tasks and OpenOCD config for an existing CMake project."""
     root = os.path.abspath(project_root)
     vscode_dir = os.path.join(root, ".vscode")
@@ -87,6 +106,7 @@ def generate_openocd_files(project_root: str, mcu: str, debugger: str) -> dict[s
 
     openocd_target = infer_openocd_target(mcu)
     openocd_interface = infer_openocd_interface(debugger)
+    openocd_transport = infer_openocd_transport(debugger)
 
     context = {
         "K2C_OPENOCD_PATH": _normalize_json_path(openocd_path),
@@ -94,9 +114,11 @@ def generate_openocd_files(project_root: str, mcu: str, debugger: str) -> dict[s
         "K2C_DEBUG_EXECUTABLE": _normalize_json_path(debug_executable),
         "K2C_OPENOCD_SEARCHDIR_JSON": "",
         "K2C_OPENOCD_SCRIPTS_ARGS": "",
-        "K2C_OPENOCD_BOARD_LINE": "",
         "K2C_OPENOCD_INTERFACE_LINE": (
             f"source [find {openocd_interface}]" if openocd_interface else ""
+        ),
+        "K2C_OPENOCD_TRANSPORT_LINE": (
+            f"transport select {openocd_transport}" if openocd_transport else ""
         ),
         "K2C_OPENOCD_TARGET_LINE": (
             f"source [find {openocd_target}]" if openocd_target else ""
@@ -104,15 +126,15 @@ def generate_openocd_files(project_root: str, mcu: str, debugger: str) -> dict[s
     }
 
     openocd_cfg = os.path.join(user_dir, "openocd.cfg")
-    if not os.path.exists(openocd_cfg):
+    if overwrite or not os.path.exists(openocd_cfg):
         write_at_template("openocd.cfg.in.j2", context, openocd_cfg, encoding="utf-8")
 
     launch_json = os.path.join(vscode_dir, "launch.json")
-    if not os.path.exists(launch_json):
+    if overwrite or not os.path.exists(launch_json):
         write_at_template("launch.json.in.j2", context, launch_json, encoding="utf-8")
 
     tasks_json = os.path.join(vscode_dir, "tasks.json")
-    if not os.path.exists(tasks_json):
+    if overwrite or not os.path.exists(tasks_json):
         write_at_template("tasks.json.in.j2", context, tasks_json, encoding="utf-8")
 
     return {
@@ -124,21 +146,16 @@ def generate_openocd_files(project_root: str, mcu: str, debugger: str) -> dict[s
         "debug_executable": debug_executable,
         "openocd_target": openocd_target,
         "openocd_interface": openocd_interface,
+        "openocd_transport": openocd_transport,
     }
 
 
 def generate_debug_templates(project_root: str) -> None:
-    """Generate CMake-time debug templates (files generated on configure)."""
+    """Generate debug template files used by CMake configure-time sync."""
     internal_dir = os.path.join(project_root, "cmake", "internal")
     templates_dir = os.path.join(internal_dir, "templates")
     ensure_dir(templates_dir)
 
-    write_template(
-        "k2c_debug.cmake.j2",
-        {},
-        os.path.join(internal_dir, "k2c_debug.cmake"),
-        encoding="utf-8",
-    )
     write_template(
         "openocd.cfg.in.j2",
         {},

@@ -5,8 +5,7 @@ import re
 
 from .common import ensure_dir, norm_path
 from .keil.device import detect_cpu_architecture
-from .keil.config import get_cmake_min_version, get_openocd_path
-from .compiler.debug import infer_openocd_target
+from .keil.config import get_cmake_min_version
 from .i18n import t
 from .template_engine import write_template
 
@@ -213,8 +212,6 @@ def generate_cmake_structure(project_data: dict, project_root: str) -> None:
                 'cpu_arch': cpu_arch,
                 'default_opt_level': project_data['opt_level'],
                 'use_newlib_nano_default': use_newlib_nano_default,
-                'openocd_path': norm_path(get_openocd_path()),
-                'openocd_target_default': infer_openocd_target(project_data.get('device', '')),
                 'asm_detected': 'ON' if asm_detected else 'OFF',
                 'asm_sources': asm_sources,
                 'gcc_startup': gcc_startup_rel,
@@ -226,7 +223,20 @@ def generate_cmake_structure(project_data: dict, project_root: str) -> None:
                 'misc_ld_flags': keil_misc_ld_flags,
             },
             user_cmake_path,
-            encoding='utf-8-sig',
+            encoding='utf-8',
+        )
+
+    cppcheck_cmake_path = os.path.join(user_dir, 'cppcheck.cmake')
+    if not os.path.exists(cppcheck_cmake_path):
+        write_template(
+            'cppcheck.cmake.j2',
+            {
+                'header_title': t('gen.user.header.title'),
+                'header_safe': t('gen.user.header.safe'),
+                'header_no_overwrite': t('gen.user.header.no_overwrite'),
+            },
+            cppcheck_cmake_path,
+            encoding='utf-8',
         )
 
     write_template(
@@ -286,6 +296,7 @@ def clean_generated(project_root: str) -> int:
         os.path.join(internal_dir, 'common', 'keil2cmake_generated.cmake'),
 
         os.path.join(user_dir, 'keil2cmake_user.cmake'),
+        os.path.join(user_dir, 'cppcheck.cmake'),
         os.path.join(user_dir, 'openocd.cfg'),
 
         os.path.join(user_dir, 'common', 'keil2cmake_project.cmake'),

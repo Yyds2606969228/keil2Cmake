@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..ir import ModelIR, NodeInfo
+from ..ir import ModelIR
 from .utils import get_shape
 
 
@@ -12,17 +12,11 @@ from .utils import get_shape
 class EmitContext:
     lines: list[str]
     model: ModelIR
-    input_name: str
-    output_name: str
+    input_ptrs: dict[str, str]
+    output_ptrs: dict[str, str]
     buffers: dict[str, str]
     consts: dict[str, str]
     weights: dict[str, str]
-    backend: str
-    cmsis_weights_t: dict[str, str]
-    cmsis_kernel_sums: dict[str, str]
-    cmsis_biases: dict[int, str]
-    backend_used: str | None = None
-    fallback_reason: str | None = None
     symbol_index: int = 0
 
     def next_symbol(self, prefix: str) -> str:
@@ -45,10 +39,10 @@ class EmitContext:
             ctype = "int64_t"
         elif dtype == "bool":
             ctype = "uint8_t"
-        if name == self.input_name:
-            return f"(({ctype}*)input)"
-        if name == self.output_name:
-            return f"(({ctype}*)output)"
+        if name in self.input_ptrs:
+            return f"(({ctype}*){self.input_ptrs[name]})"
+        if name in self.output_ptrs:
+            return f"(({ctype}*){self.output_ptrs[name]})"
         if name in self.weights:
             return f"(({ctype}*){self.weights[name]})"
         if name in self.consts:
@@ -80,12 +74,3 @@ class EmitContext:
         if tensor.qscale is None or tensor.qzero is None:
             return None
         return float(tensor.qscale), int(tensor.qzero)
-
-    def cmsis_weight_t(self, name: str) -> str | None:
-        return self.cmsis_weights_t.get(name)
-
-    def cmsis_kernel_sum(self, name: str) -> str | None:
-        return self.cmsis_kernel_sums.get(name)
-
-    def cmsis_bias(self, node: NodeInfo) -> str | None:
-        return self.cmsis_biases.get(id(node))

@@ -17,15 +17,12 @@ SRC = ROOT / "src"
 OUTPUT = ROOT / "docs" / "onnx_opset12_coverage_matrix.md"
 CODEGEN = SRC / "keil2cmake" / "tinyml" / "codegen.py"
 C_OPS_DIR = SRC / "keil2cmake" / "tinyml" / "backends" / "c" / "ops"
-CMSIS_OPS_DIR = SRC / "keil2cmake" / "tinyml" / "backends" / "cmsis_nn" / "ops"
 
 
 @dataclass(frozen=True)
 class Row:
     op: str
     c_native: bool
-    cmsis_native: bool
-    cmsis_backend: bool
     quantized: bool
     note: str
 
@@ -51,7 +48,7 @@ C_CONSTRAINTS: dict[str, str] = {
     "ArgMax": "supports axis/keepdims/select_last_index",
     "ArgMin": "supports axis/keepdims/select_last_index",
     "Expand": "shape input must be constant; broadcast rules applied",
-    "Where": "broadcast semantics; quantized path requires aligned quant params",
+    "Where": "broadcast semantics",
     "SpaceToDepth": "subset: 4D NCHW; H/W divisible by blocksize",
     "DepthToSpace": "subset: 4D NCHW; DCR/CRD; C divisible by blocksize^2",
     "Pad": "subset: mode=constant; static rank>=1",
@@ -77,19 +74,32 @@ C_CONSTRAINTS: dict[str, str] = {
     "ScatterElements": "supports reduction=none/add/mul/max/min",
     "ScatterND": "supports reduction=none/add/mul/max/min",
     "Shrink": "current subset: fp32/int8/int16",
-}
-
-CMSIS_CONSTRAINTS: dict[str, str] = {
-    "Add": "int8/int16; same input/output shape; Add also requires aligned scales",
-    "Mul": "int8/int16; same input/output shape",
-    "Relu": "int8/int16; aligned quant params",
-    "Conv": "int8, N=1; regular/depthwise subset; generic grouped conv falls back to C",
-    "MatMul": "int8; 2D subset",
-    "Gemm": "int8; 2D subset equivalent to MatMul",
-    "MaxPool": "int8/int16; 4D NCHW, N=1",
-    "AveragePool": "int8/int16; 4D NCHW, N=1",
-    "GlobalAveragePool": "int8/int16; 4D NCHW, N=1",
-    "GlobalMaxPool": "int8/int16; 4D NCHW, N=1",
+    "RandomUniform": "current subset: float32/int8/int16 output",
+    "RandomUniformLike": "current subset: float32/int8/int16 output",
+    "RandomNormal": "current subset: float32/int8/int16 output",
+    "RandomNormalLike": "current subset: float32/int8/int16 output",
+    "Multinomial": "current subset: float32/int8/int16 2D input -> int32/int64 output",
+    "Unique": "current subset: axis=None (flatten); fixed-capacity outputs",
+    "NegativeLogLikelihoodLoss": "current subset: float32/int8/int16 rank-2 input [N,C], rank-1 target [N]",
+    "SoftmaxCrossEntropyLoss": "current subset: float32/int8/int16 rank-2 logits [N,C], rank-1 target [N]",
+    "MaxRoiPool": "current subset: float32/int8/int16 NCHW + float32 rois[num_rois,5]",
+    "MaxUnpool": "current subset: 4D NCHW unpool with provided indices",
+    "RNN": "current subset: float32, forward direction, num_directions=1",
+    "GRU": "current subset: float32, forward direction, num_directions=1, linear_before_reset=0",
+    "LSTM": "current subset: float32, forward direction, num_directions=1, no peephole",
+    "If": "registered; requires control-flow lowering before C codegen",
+    "Loop": "registered; requires control-flow lowering before C codegen",
+    "Scan": "registered; requires control-flow lowering before C codegen",
+    "SequenceConstruct": "registered; requires sequence lowering before C codegen",
+    "SequenceEmpty": "registered; requires sequence lowering before C codegen",
+    "SequenceAt": "registered; requires sequence lowering before C codegen",
+    "SequenceInsert": "registered; requires sequence lowering before C codegen",
+    "SequenceErase": "registered; requires sequence lowering before C codegen",
+    "SequenceLength": "registered; requires sequence lowering before C codegen",
+    "SplitToSequence": "registered; requires sequence lowering before C codegen",
+    "ConcatFromSequence": "registered; requires sequence lowering before C codegen",
+    "StringNormalizer": "current subset: pre-tokenized numeric tensors only",
+    "TfIdfVectorizer": "current subset: int32/int64 unigram TF/TFIDF",
 }
 
 
@@ -172,28 +182,22 @@ def _mark(v: bool) -> str:
     return "Y" if v else "N"
 
 
-def _build_rows(ops: list[str], quant_ops: set[str], c_ops: set[str], cmsis_ops: set[str]) -> list[Row]:
+def _build_rows(ops: list[str], quant_ops: set[str], c_ops: set[str]) -> list[Row]:
     rows: list[Row] = []
     for op in ops:
         c_native = op in c_ops
-        cmsis_native = op in cmsis_ops
-        cmsis_backend = c_native or cmsis_native
         quantized = op in quant_ops
         notes: list[str] = []
         if op in C_CONSTRAINTS:
             notes.append(f"C: {C_CONSTRAINTS[op]}")
-        if op in CMSIS_CONSTRAINTS:
-            notes.append(f"CMSIS: {CMSIS_CONSTRAINTS[op]}")
         if not notes and c_native:
             notes.append("basic support")
-        if not notes and not c_native and not cmsis_native:
+        if not notes and not c_native:
             notes.append("not implemented")
         rows.append(
             Row(
                 op=op,
                 c_native=c_native,
-                cmsis_native=cmsis_native,
-                cmsis_backend=cmsis_backend,
                 quantized=quantized,
                 note="; ".join(notes),
             )
@@ -204,8 +208,6 @@ def _build_rows(ops: list[str], quant_ops: set[str], c_ops: set[str], cmsis_ops:
 def _render(rows: list[Row], quant_ops: set[str]) -> str:
     total = len(rows)
     c_supported = sum(1 for r in rows if r.c_native)
-    cmsis_native = sum(1 for r in rows if r.cmsis_native)
-    cmsis_backend = sum(1 for r in rows if r.cmsis_backend)
     quant_cov = sum(1 for r in rows if r.quantized and r.c_native)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
 
@@ -214,10 +216,9 @@ def _render(rows: list[Row], quant_ops: set[str]) -> str:
     lines.append("")
     lines.append(f"- Generated at (UTC): `{now}`")
     lines.append("- Scope: `domain in ('', 'ai.onnx')` and `since_version <= 12`")
-    lines.append("- Backend rule: `backend=cmsis-nn` tries CMSIS-NN first, then falls back to C, otherwise errors")
-    lines.append("- Backend rule: `backend=c` does not fall back")
-    lines.append("- Default CLI: `--backend c --quant int8 --weights flash --emit c`")
-    lines.append("- Quantization: `int8/int16` uses Q/DQ graph and `codegen.py::quant_ops`")
+    lines.append("- Backend rule: C backend only")
+    lines.append("- Default CLI: `--weights flash --emit c`")
+    lines.append("- Quantization: inferred from model graph Q/DQ and tensor dtypes")
     lines.append("- Weight storage: keep original ONNX dtype (`float/int8/int16/int32/int64`)")
     lines.append("")
     lines.append("## Summary")
@@ -226,18 +227,15 @@ def _render(rows: list[Row], quant_ops: set[str]) -> str:
     lines.append("|---|---:|")
     lines.append(f"| Opset12 operators | {total} |")
     lines.append(f"| C native support | {c_supported} |")
-    lines.append(f"| CMSIS-NN native support | {cmsis_native} |")
-    lines.append(f"| `backend=cmsis-nn` available (with C fallback) | {cmsis_backend} |")
-    lines.append(f"| Quantized coverage on C (`quant_ops` ∩ C support) | {quant_cov} |")
+    lines.append(f"| Quantized coverage on C (`quant_ops` intersect C support) | {quant_cov} |")
     lines.append("")
     lines.append("## Matrix")
     lines.append("")
-    lines.append("| Operator | C | CMSIS-NN(native) | cmsis-nn backend | Quant(int8/int16) | Notes |")
-    lines.append("|---|---:|---:|---:|---:|---|")
+    lines.append("| Operator | C | Quant(int8/int16) | Notes |")
+    lines.append("|---|---:|---:|---|")
     for r in rows:
         lines.append(
-            f"| {r.op} | {_mark(r.c_native)} | {_mark(r.cmsis_native)} | "
-            f"{_mark(r.cmsis_backend)} | {_mark(r.quantized)} | {r.note} |"
+            f"| {r.op} | {_mark(r.c_native)} | {_mark(r.quantized)} | {r.note} |"
         )
     lines.append("")
     lines.append("## Quant Operator Set (`codegen.py::quant_ops`)")
@@ -252,9 +250,8 @@ def _render(rows: list[Row], quant_ops: set[str]) -> str:
 def main() -> int:
     quant_ops = _load_quant_ops(CODEGEN)
     c_ops = _scan_registered_ops(C_OPS_DIR)
-    cmsis_ops = _scan_registered_ops(CMSIS_OPS_DIR)
     ops = _opset12_ops()
-    rows = _build_rows(ops, quant_ops, c_ops, cmsis_ops)
+    rows = _build_rows(ops, quant_ops, c_ops)
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(_render(rows, quant_ops), encoding="utf-8")
     print(f"[ok] wrote {OUTPUT}")

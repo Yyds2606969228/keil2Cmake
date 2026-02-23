@@ -120,6 +120,9 @@ LR_IROM1 __ROM_BASE __ROM_SIZE
             </VariousControls>
           </LDads>
         </TargetArmAds>
+        <DebugOpt>
+          <pMon>Segger\\JL2CM3.dll</pMon>
+        </DebugOpt>
       </TargetOption>
       <Groups>
         <Group>
@@ -144,19 +147,20 @@ LR_IROM1 __ROM_BASE __ROM_SIZE
             from keil2cmake.project_gen import generate_cmake_structure
             from keil2cmake.compiler.toolchains import generate_toolchains
             from keil2cmake.compiler.presets import generate_cmake_presets
-            from keil2cmake.compiler.debug import generate_debug_templates
+            from keil2cmake.compiler.debug import generate_openocd_files
 
             set_language('en')
             data = parse_uvprojx(uvprojx_path)
             self.assertTrue(data.get('uvprojx_dir', '').endswith('MDK-ARM'))
             self.assertEqual(data.get('keil_compiler'), 'armclang')
+            self.assertEqual(data.get('debugger'), 'jlink')
             self.assertTrue(data.get('use_microlib'))
 
             os.makedirs(project_root, exist_ok=True)
             generate_cmake_structure(data, project_root)
             generate_toolchains(data, project_root)
             generate_cmake_presets(project_root, data)
-            generate_debug_templates(project_root)
+            generate_openocd_files(project_root, data.get('device', ''), data.get('debugger', ''))
 
             gen_path = os.path.join(project_root, 'cmake', 'user', 'keil2cmake_user.cmake')
             self.assertTrue(os.path.exists(gen_path))
@@ -168,24 +172,35 @@ LR_IROM1 __ROM_BASE __ROM_SIZE
             self.assertIn('startup_stm32f103x.s', gen)
             self.assertIn('set(K2C_USE_NEWLIB_NANO ON', gen)
             self.assertIn('set(K2C_ASM_DETECTED ON', gen)
-            self.assertIn('set(K2C_CHECKCPP_ENABLE', gen)
-            self.assertIn('set(K2C_CHECKCPP_JOBS', gen)
-            self.assertIn('set(K2C_CHECKCPP_EXCLUDES', gen)
-            self.assertIn('set(K2C_CHECKCPP_ENABLE_ALL', gen)
-            self.assertIn('set(K2C_CHECKCPP_ENABLE_WARNING', gen)
-            self.assertIn('set(K2C_CHECKCPP_INCONCLUSIVE', gen)
-            self.assertIn('set(K2C_OPENOCD_PATH', gen)
-            self.assertIn('set(K2C_DEBUG_PROBE', gen)
+            self.assertNotIn('set(K2C_CHECKCPP_ENABLE', gen)
+            self.assertNotIn('set(K2C_OPENOCD_PATH', gen)
+            self.assertNotIn('set(K2C_DEBUG_PROBE', gen)
+
+            cppcheck_path = os.path.join(project_root, 'cmake', 'user', 'cppcheck.cmake')
+            self.assertTrue(os.path.exists(cppcheck_path))
+            with open(cppcheck_path, 'r', encoding='utf-8') as f:
+                cppcheck_cfg = f.read()
+            self.assertIn('set(K2C_CHECKCPP_ENABLE', cppcheck_cfg)
+            self.assertIn('set(K2C_CHECKCPP_JOBS', cppcheck_cfg)
+            self.assertIn('set(K2C_CHECKCPP_EXCLUDES', cppcheck_cfg)
+            self.assertIn('set(K2C_CHECKCPP_ENABLE_ALL', cppcheck_cfg)
+            self.assertIn('set(K2C_CHECKCPP_ENABLE_WARNING', cppcheck_cfg)
+            self.assertIn('set(K2C_CHECKCPP_INCONCLUSIVE', cppcheck_cfg)
 
             presets_path = os.path.join(project_root, 'CMakePresets.json')
             with open(presets_path, 'r', encoding='utf-8') as f:
                 presets = f.read()
             self.assertIn('"name": "build"', presets)
             self.assertIn('"name": "check"', presets)
+            self.assertIn('K2C_CHECKCPP', presets)
             self.assertIn('K2C_OPENOCD_PATH', presets)
-            self.assertIn('K2C_DEBUG_PROBE', presets)
-            self.assertIn('"K2C_DEBUG_PROBE": ""', presets)
+            self.assertIn('K2C_OPENOCD_TARGET', presets)
+            self.assertIn('K2C_OPENOCD_INTERFACE', presets)
+            self.assertIn('K2C_OPENOCD_TRANSPORT', presets)
             self.assertIn('target/stm32f1x.cfg', presets)
+            self.assertIn('interface/jlink.cfg', presets)
+            self.assertIn('"K2C_OPENOCD_TRANSPORT": "swd"', presets)
+            self.assertNotIn('K2C_DEBUG_PROBE', presets)
 
             # Ensure we keep ASM optimization isolation in top-level CMakeLists.
             cmakelists = os.path.join(project_root, 'CMakeLists.txt')
@@ -196,20 +211,19 @@ LR_IROM1 __ROM_BASE __ROM_SIZE
             self.assertIn('K2C_CHECKCPP_ENABLE', top)
             self.assertIn('K2C_CHECKCPP_JOBS', top)
             self.assertIn('K2C_CHECKCPP_EXCLUDES', top)
-            self.assertIn('k2c_debug.cmake', top)
+            self.assertIn('cmake/user/cppcheck.cmake', top)
+            self.assertNotIn('k2c_debug.cmake', top)
 
             launch_path = os.path.join(project_root, '.vscode', 'launch.json')
             tasks_path = os.path.join(project_root, '.vscode', 'tasks.json')
             ocd_cfg = os.path.join(project_root, 'cmake', 'user', 'openocd.cfg')
-            self.assertFalse(os.path.exists(launch_path))
-            self.assertFalse(os.path.exists(tasks_path))
-            self.assertFalse(os.path.exists(ocd_cfg))
-
-            debug_cmake = os.path.join(project_root, 'cmake', 'internal', 'k2c_debug.cmake')
-            self.assertTrue(os.path.exists(debug_cmake))
-            with open(debug_cmake, 'r', encoding='utf-8') as f:
-                debug_cmake_content = f.read()
-            self.assertIn('openocd.cfg.in', debug_cmake_content)
+            self.assertTrue(os.path.exists(launch_path))
+            self.assertTrue(os.path.exists(tasks_path))
+            self.assertTrue(os.path.exists(ocd_cfg))
+            with open(ocd_cfg, 'r', encoding='utf-8') as f:
+                ocd = f.read()
+            self.assertIn('interface/jlink.cfg', ocd)
+            self.assertIn('transport select swd', ocd)
 
             # Scatter conversion should generate ld script and set default linker script.
             converted_ld = os.path.join(project_root, 'cmake', 'internal', 'keil2cmake_from_sct.ld')
@@ -225,6 +239,7 @@ LR_IROM1 __ROM_BASE __ROM_SIZE
             with open(toolchain, 'r', encoding='utf-8') as f:
                 tc = f.read()
             self.assertIn('keil2cmake_from_sct.ld', tc)
+            self.assertIn('set(CMAKE_EXECUTABLE_SUFFIX ".elf")', tc)
 
 
 class TestScatterConversion(unittest.TestCase):
@@ -313,7 +328,7 @@ LR_IROM1 ROM_BASE ROM_SIZE
 class TestDebugTemplates(unittest.TestCase):
     def test_debug_template_files_exist(self) -> None:
         root = ROOT / 'src' / 'keil2cmake' / 'templates'
-        self.assertTrue((root / 'k2c_debug.cmake.j2').exists())
+        self.assertTrue((root / 'cppcheck.cmake.j2').exists())
         self.assertTrue((root / 'openocd.cfg.in.j2').exists())
         self.assertTrue((root / 'launch.json.in.j2').exists())
         self.assertTrue((root / 'tasks.json.in.j2').exists())
@@ -339,21 +354,12 @@ class TestDebugTemplates(unittest.TestCase):
     def test_openocd_cfg_template_contains_sources(self) -> None:
         tpl = ROOT / 'src' / 'keil2cmake' / 'templates' / 'openocd.cfg.in.j2'
         content = tpl.read_text(encoding='utf-8')
-        self.assertIn('@K2C_OPENOCD_BOARD_LINE@', content)
         self.assertIn('@K2C_OPENOCD_INTERFACE_LINE@', content)
+        self.assertIn('@K2C_OPENOCD_TRANSPORT_LINE@', content)
         self.assertIn('@K2C_OPENOCD_TARGET_LINE@', content)
+        self.assertIn('Optional transport list', content)
+        self.assertNotIn('@K2C_OPENOCD_BOARD_LINE@', content)
         self.assertIn('OpenOCD config', content)
-
-    def test_debug_cmake_probe_mapping(self) -> None:
-        tpl = ROOT / 'src' / 'keil2cmake' / 'templates' / 'k2c_debug.cmake.j2'
-        content = tpl.read_text(encoding='utf-8')
-        self.assertIn('daplink', content)
-        self.assertIn('jlink', content)
-        self.assertIn('stlink', content)
-        self.assertIn('interface/cmsis-dap.cfg', content)
-        self.assertIn('interface/jlink.cfg', content)
-        self.assertIn('interface/stlink.cfg', content)
-        self.assertIn('configure_file', content)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

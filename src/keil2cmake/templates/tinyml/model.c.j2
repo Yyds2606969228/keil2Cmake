@@ -15,22 +15,30 @@ static const size_t k2c_buffer_offsets[{{ buffer_offsets|length }}] = { {{ buffe
 static const size_t k2c_weight_offsets[{{ weight_offsets|length }}] = { {{ weight_offsets|join(", ") }} };
 {% endif %}
 
-{{ input_shape_decl }}
-{{ output_shape_decl }}
+{% for decl in input_shape_decls %}
+{{ decl }}
+{% endfor %}
+{% for decl in output_shape_decls %}
+{{ decl }}
+{% endfor %}
 static const k2c_io_desc_t k2c_inputs[] = {
-  { "{{ input_name }}", {{ input_shape_ptr }}, {{ input_rank }}, {{ input_elem_size }} },
+{% for desc in input_descs %}
+  { "{{ desc.name }}", {{ desc.shape_ptr }}, {{ desc.rank }}, {{ desc.elem_size }}, {{ desc.size }} },
+{% endfor %}
 };
 static const k2c_io_desc_t k2c_outputs[] = {
-  { "{{ output_name }}", {{ output_shape_ptr }}, {{ output_rank }}, {{ output_elem_size }} },
+{% for desc in output_descs %}
+  { "{{ desc.name }}", {{ desc.shape_ptr }}, {{ desc.rank }}, {{ desc.elem_size }}, {{ desc.size }} },
+{% endfor %}
 };
 
 const k2c_io_desc_t* k2c_get_input_desc(size_t* n) {
-  if (n) *n = 1;
+  if (n) *n = {{ num_inputs }};
   return k2c_inputs;
 }
 
 const k2c_io_desc_t* k2c_get_output_desc(size_t* n) {
-  if (n) *n = 1;
+  if (n) *n = {{ num_outputs }};
   return k2c_outputs;
 }
 
@@ -60,11 +68,11 @@ int k2c_prepare(k2c_ctx_t* ctx, void* arena, size_t arena_bytes) {
   return 0;
 }
 
-int k2c_invoke(k2c_ctx_t* ctx, const void* input_ptr, void* output_ptr) {
+int k2c_invoke(k2c_ctx_t* ctx, const void* const* input_ptrs, void* const* output_ptrs) {
 {{ invoke_body }}
 }
 
-void k2c_forward(const void* input, void* output) {
+void k2c_forward(const void* const* input_ptrs, void* const* output_ptrs) {
   static int k2c_prepared = 0;
   static k2c_ctx_t k2c_ctx;
   static float k2c_default_arena[K2C_ARENA_WORDS];
@@ -72,15 +80,17 @@ void k2c_forward(const void* input, void* output) {
     (void)k2c_prepare(&k2c_ctx, k2c_default_arena, sizeof(k2c_default_arena));
     k2c_prepared = 1;
   }
-  (void)k2c_invoke(&k2c_ctx, input, output);
+  (void)k2c_invoke(&k2c_ctx, input_ptrs, output_ptrs);
 }
 
 static const k2c_model_t k2c_model = {
   .forward = k2c_forward,
   .prepare = k2c_prepare,
   .invoke = k2c_invoke,
-  .input_size = {{ input_size }},
-  .output_size = {{ output_size }},
+  .num_inputs = {{ num_inputs }},
+  .num_outputs = {{ num_outputs }},
+  .input_size = {{ input_total_size }},
+  .output_size = {{ output_total_size }},
   .arena_bytes = {{ arena_bytes }},
 };
 

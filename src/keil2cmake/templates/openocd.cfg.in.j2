@@ -1,9 +1,12 @@
 # Keil2Cmake OpenOCD config (user editable)
-# If you have a board cfg, set K2C_OPENOCD_BOARD in preset/user cmake.
-
-@K2C_OPENOCD_BOARD_LINE@
 @K2C_OPENOCD_INTERFACE_LINE@
+@K2C_OPENOCD_TRANSPORT_LINE@
 @K2C_OPENOCD_TARGET_LINE@
+
+# Optional transport list (pick one if needed):
+# transport select hla_swd   # common for ST-Link
+# transport select swd       # common for J-Link/CMSIS-DAP on Cortex-M
+# transport select jtag      # when board/debugger is wired for JTAG
 
 # Optional: adapter speed in kHz
 # adapter speed 4000

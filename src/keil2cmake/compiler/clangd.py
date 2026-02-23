@@ -55,7 +55,7 @@ def generate_clangd_config(project_root: str, cpu_arch: str, use_microlib: bool 
         '--target=arm-none-eabi',
         f'-mcpu={cpu_name}',
         '-mthumb',
-        '-D__ARM_ARCH_PROFILE="M"',
+        '-D__ARM_ARCH_PROFILE=M',
     ]
 
     if gcc_toolchain_root:

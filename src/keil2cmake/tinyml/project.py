@@ -23,38 +23,22 @@ def _infer_tool(toolchain_path: str, name: str) -> str:
 def generate_tinyml_project(
     model_path: str,
     output_root: str,
-    backend: str,
-    quant: str,
     weights: str,
     emit: str,
 ) -> dict[str, object]:
-    if backend != "c":
-        if backend != "cmsis-nn":
-            raise ValueError("Only backend 'c' or 'cmsis-nn' is supported in this version.")
+    backend = "c"
     model = load_onnx_model(model_path)
-    quant = quant.lower()
-    if quant not in ("fp32", "int8", "int16"):
-        raise ValueError("Unsupported quant type.")
-    if quant != "fp32":
-        has_q = any(t.dtype in ("uint8", "int8", "int16") for t in model.tensors.values())
-        if not has_q:
-            raise ValueError("Quantized mode requires Q/DQ with uint8/int8/int16 tensors.")
-        if quant == "int8" and any(t.dtype == "int16" for t in model.tensors.values()):
-            raise ValueError("Quant mode int8 does not allow int16 tensors.")
-        if quant == "int16" and any(t.dtype in ("uint8", "int8") for t in model.tensors.values()):
-            raise ValueError("Quant mode int16 does not allow uint8/int8 tensors.")
     model_name = Path(model_path).stem
 
     root = Path(output_root)
     project_dir = root / model_name
     project_dir.mkdir(parents=True, exist_ok=True)
 
-    codegen_result = generate_c_code(model, str(project_dir), model_name, weights, quant, backend)
+    codegen_result = generate_c_code(model, str(project_dir), model_name, weights)
     manifest_path = generate_manifest(
         model,
         str(project_dir),
         backend,
-        quant,
         weights,
         int(codegen_result["arena_bytes"]),
         codegen_result.get("op_backends", []),
@@ -96,7 +80,6 @@ def generate_tinyml_project(
         "manifest": manifest_path,
         "library": lib_path,
         "backend": backend,
-        "quant": quant,
         "weights": weights,
         "validation": validation,
     }

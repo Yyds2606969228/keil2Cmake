@@ -16,6 +16,20 @@ def _index_ctype(dtype: str) -> str:
     raise ValueError("TopK indices dtype must be int64/int32.")
 
 
+def _value_ctype(dtype: str) -> str:
+    if dtype == "float32":
+        return "float"
+    if dtype == "int8":
+        return "int8_t"
+    if dtype == "int16":
+        return "int16_t"
+    if dtype == "int32":
+        return "int32_t"
+    if dtype == "int64":
+        return "int64_t"
+    raise ValueError("TopK input dtype is unsupported.")
+
+
 @register_op("TopK")
 def emit_topk(ctx: EmitContext, node: NodeInfo) -> None:
     if len(node.inputs) < 2:
@@ -32,6 +46,7 @@ def emit_topk(ctx: EmitContext, node: NodeInfo) -> None:
     if x_dtype not in ("float32", "int8", "int16", "int32", "int64"):
         raise ValueError("TopK input dtype is unsupported.")
     idx_ctype = _index_ctype(ctx.dtype(i_name))
+    val_ctype = _value_ctype(x_dtype)
 
     k_tensor = ctx.model.tensors.get(k_name)
     if k_tensor is None or k_tensor.data is None or len(k_tensor.data) == 0:
@@ -75,7 +90,7 @@ def emit_topk(ctx: EmitContext, node: NodeInfo) -> None:
     ctx.lines.append(f"    for (size_t inner_i = 0; inner_i < {inner}; ++inner_i) {{")
     ctx.lines.append(f"      for (size_t top_i = 0; top_i < {k}; ++top_i) {{")
     ctx.lines.append("        int has_best = 0;")
-    ctx.lines.append("        float best_val = 0.0f;")
+    ctx.lines.append(f"        {val_ctype} best_val = ({val_ctype})0;")
     ctx.lines.append("        size_t best_idx = 0;")
     ctx.lines.append(f"        for (size_t axis_i = 0; axis_i < {axis_dim}; ++axis_i) {{")
     ctx.lines.append("          int used = 0;")
@@ -89,7 +104,7 @@ def emit_topk(ctx: EmitContext, node: NodeInfo) -> None:
     ctx.lines.append(
         f"          size_t src_idx = (outer_i * {axis_dim} + axis_i) * {inner} + inner_i;"
     )
-    ctx.lines.append(f"          float cur = (float){x}[src_idx];")
+    ctx.lines.append(f"          {val_ctype} cur = {x}[src_idx];")
     ctx.lines.append("          if (!has_best) {")
     ctx.lines.append("            has_best = 1;")
     ctx.lines.append("            best_val = cur;")

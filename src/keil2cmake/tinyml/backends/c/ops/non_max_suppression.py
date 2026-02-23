@@ -89,6 +89,8 @@ def emit_non_max_suppression(ctx: EmitContext, node: NodeInfo) -> None:
     num_batches = int(boxes_shape[0])
     spatial_dim = int(boxes_shape[1])
     num_classes = int(scores_shape[1])
+    if spatial_dim <= 0:
+        raise ValueError("NonMaxSuppression spatial dimension must be positive.")
 
     boxes = ctx.map_ptr(boxes_name)
     scores = ctx.map_ptr(scores_name)
@@ -102,6 +104,8 @@ def emit_non_max_suppression(ctx: EmitContext, node: NodeInfo) -> None:
     score_var = ctx.next_symbol("k2c_nms_score_threshold")
 
     ctx.lines.append(f"  size_t {out_pos} = 0;")
+    ctx.lines.append(f"  static int32_t {used}[{spatial_dim}];")
+    ctx.lines.append(f"  static int32_t {selected}[{spatial_dim}];")
     _emit_runtime_scalar_int(ctx, max_boxes_name, 0, max_output_var)
     _emit_runtime_scalar_float(ctx, iou_name, 0.0, iou_var, "iou_threshold")
     _emit_runtime_scalar_float(ctx, score_name, -3.402823466e38, score_var, "score_threshold")
@@ -114,8 +118,6 @@ def emit_non_max_suppression(ctx: EmitContext, node: NodeInfo) -> None:
     ctx.lines.append(f"  if ({max_output_var} > 0) {{")
     ctx.lines.append(f"    for (size_t b = 0; b < {num_batches}; ++b) {{")
     ctx.lines.append(f"      for (size_t c = 0; c < {num_classes}; ++c) {{")
-    ctx.lines.append(f"      int32_t {used}[{spatial_dim}];")
-    ctx.lines.append(f"      int32_t {selected}[{spatial_dim}];")
     ctx.lines.append(f"      for (size_t i = 0; i < {spatial_dim}; ++i) {used}[i] = 0;")
     ctx.lines.append("      size_t selected_count = 0;")
     ctx.lines.append(f"      for (size_t pick = 0; pick < {spatial_dim}; ++pick) {{")

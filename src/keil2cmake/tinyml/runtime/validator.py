@@ -2484,11 +2484,42 @@ def _eval_model(model: ModelIR, inputs: dict[str, np.ndarray]) -> dict[str, np.n
 
 def _run_reference_output(
     model_path: str,
-    input_name: str,
-    input_data: np.ndarray,
+    input_data: dict[str, np.ndarray],
+    output_names: list[str],
     *,
     allow_reference_fallback: bool = True,
-) -> tuple[np.ndarray | None, str, str]:
+) -> tuple[dict[str, np.ndarray] | None, str, str]:
+    def _map_outputs(
+        outputs: list[np.ndarray] | tuple[np.ndarray, ...],
+        names: list[str],
+    ) -> tuple[dict[str, np.ndarray] | None, str]:
+        if not outputs:
+            return None, "reference output missing"
+        if len(outputs) != len(names):
+            return None, "reference output count mismatch"
+        return {name: np.array(val) for name, val in zip(names, outputs)}, ""
+
+    def _run_ort_with_ir_compat() -> tuple[dict[str, np.ndarray] | None, str]:
+        # Some environments ship older onnxruntime builds that reject newer IR.
+        try:
+            compat_model = onnx.load(model_path)
+            ir_version = int(getattr(compat_model, "ir_version", 0) or 0)
+            if ir_version <= 9:
+                return None, "ir-compat retry skipped"
+            compat_model.ir_version = 9
+            sess = ort.InferenceSession(  # type: ignore[union-attr]
+                compat_model.SerializeToString(),
+                providers=["CPUExecutionProvider"],
+            )
+            outputs = sess.run(output_names or None, input_data)
+            names = output_names or [o.name for o in sess.get_outputs()]
+            mapped, reason = _map_outputs(outputs, names)
+            if mapped is None:
+                return None, reason
+            return mapped, ""
+        except Exception as compat_exc:
+            return None, f"ir-compat retry failed: {compat_exc}"
+
     ort_reason = ""
     if ort is not None:
         try:
@@ -2496,12 +2527,21 @@ def _run_reference_output(
                 model_path,
                 providers=["CPUExecutionProvider"],
             )
-            outputs = sess.run(None, {input_name: input_data})
-            if outputs:
-                return np.array(outputs[0]), "onnxruntime", ""
-            return None, "onnxruntime", "reference output missing"
+            outputs = sess.run(output_names or None, input_data)
+            names = output_names or [o.name for o in sess.get_outputs()]
+            mapped, reason = _map_outputs(outputs, names)
+            if mapped is None:
+                return None, "onnxruntime", reason
+            return mapped, "onnxruntime", ""
         except Exception as exc:
             ort_reason = f"onnxruntime error: {exc}"
+            msg = str(exc).lower()
+            if "unsupported model ir version" in msg or "max supported ir version" in msg:
+                compat_outputs, compat_reason = _run_ort_with_ir_compat()
+                if compat_outputs is not None:
+                    return compat_outputs, "onnxruntime(ir-compat)", ""
+                if compat_reason:
+                    ort_reason = f"{ort_reason}; {compat_reason}"
     else:
         ort_reason = "onnxruntime unavailable"
 
@@ -2512,9 +2552,15 @@ def _run_reference_output(
         try:
             onnx_model = onnx.load(model_path)
             ref_eval = ReferenceEvaluator(onnx_model)
-            outputs = ref_eval.run(None, {input_name: input_data})
+            outputs = ref_eval.run(output_names or None, input_data)
             if outputs:
-                return np.array(outputs[0]), "onnx.reference", ""
+                names = output_names
+                if not names:
+                    names = [v.name for v in onnx_model.graph.output]
+                if len(outputs) != len(names):
+                    return None, "onnx.reference", "reference output count mismatch"
+                mapped = {name: np.array(val) for name, val in zip(names, outputs)}
+                return mapped, "onnx.reference", ""
             return None, "onnx.reference", "reference output missing"
         except Exception as exc:
             if ort_reason:
@@ -2539,95 +2585,143 @@ def validate_model_consistency(
 ) -> ValidationResult:
     if ort is None and ReferenceEvaluator is None:
         return ValidationResult(status="skipped", reason="onnxruntime/reference evaluator unavailable")
-    if len(model.inputs) != 1 or len(model.outputs) != 1:
-        return ValidationResult(status="skipped", reason="only single input/output supported")
-
-    input_tensor = model.inputs[0]
-    input_shape = list(input_tensor.shape)
-    if any(dim <= 0 for dim in input_shape):
-        return ValidationResult(status="skipped", reason="input shape unknown")
-    input_elems = int(np.prod(input_shape)) if input_shape else 1
-    if input_elems > max_input_elems:
-        return ValidationResult(status="skipped", reason="input too large for validation")
-
     rng = np.random.default_rng(seed)
-    if input_tensor.dtype == "float32":
-        input_data = rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-    elif input_tensor.dtype == "int8":
-        input_data = rng.integers(-128, 128, size=input_shape, dtype=np.int8)
-    elif input_tensor.dtype == "int16":
-        input_data = rng.integers(-32768, 32768, size=input_shape, dtype=np.int16)
-    else:
-        return ValidationResult(status="skipped", reason="input dtype unsupported")
 
-    ref, ref_engine, ref_reason = _run_reference_output(
+    if not model.inputs or not model.outputs:
+        return ValidationResult(status="skipped", reason="model has no inputs or outputs")
+
+    input_data: dict[str, np.ndarray] = {}
+    for input_tensor in model.inputs:
+        input_shape = list(input_tensor.shape)
+        if any(dim <= 0 for dim in input_shape):
+            return ValidationResult(
+                status="skipped",
+                reason=f"input shape unknown: {input_tensor.name}",
+            )
+        input_elems = int(np.prod(input_shape)) if input_shape else 1
+        if input_elems > max_input_elems:
+            return ValidationResult(
+                status="skipped",
+                reason=f"input too large for validation: {input_tensor.name}",
+            )
+
+        if input_tensor.dtype == "float32":
+            data = rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+        elif input_tensor.dtype == "uint8":
+            data = rng.integers(0, 256, size=input_shape, dtype=np.uint8)
+        elif input_tensor.dtype == "int8":
+            data = rng.integers(-128, 128, size=input_shape, dtype=np.int8)
+        elif input_tensor.dtype == "int16":
+            data = rng.integers(-32768, 32768, size=input_shape, dtype=np.int16)
+        elif input_tensor.dtype == "int32":
+            data = rng.integers(-32768, 32768, size=input_shape, dtype=np.int32)
+        elif input_tensor.dtype == "int64":
+            data = rng.integers(-32768, 32768, size=input_shape, dtype=np.int64)
+        elif input_tensor.dtype == "bool":
+            data = rng.integers(0, 2, size=input_shape, dtype=np.uint8).astype(np.bool_)
+        else:
+            return ValidationResult(
+                status="skipped",
+                reason=f"input dtype unsupported: {input_tensor.dtype}",
+            )
+        if input_shape:
+            input_data[input_tensor.name] = data.reshape(input_shape)
+        else:
+            input_data[input_tensor.name] = np.asarray(data).reshape(())
+
+    output_names = [t.name for t in model.outputs]
+    ref_outputs, ref_engine, ref_reason = _run_reference_output(
         model_path,
-        input_tensor.name,
         input_data,
+        output_names,
         allow_reference_fallback=allow_reference_fallback,
     )
-    if ref is None:
+    if ref_outputs is None:
         return ValidationResult(status="skipped", reason=ref_reason)
 
-    pred: np.ndarray
     pred_engine: str
+    pred_outputs: dict[str, np.ndarray]
     if source_path and header_path:
         c_run = run_generated_c_model(model, source_path, header_path, input_data)
-        if not c_run.ok or c_run.output is None:
+        if not c_run.ok or c_run.outputs is None:
             return ValidationResult(status="skipped", reason=f"generated-c run skipped: {c_run.reason}")
-        pred = c_run.output
+        pred_outputs = c_run.outputs
         pred_engine = "generated-c"
     else:
         try:
-            pred_tensors = _eval_model(model, {input_tensor.name: input_data})
+            pred_tensors = _eval_model(model, input_data)
         except Exception as exc:
             return ValidationResult(status="skipped", reason=f"predict eval error: {exc}")
-        out_name = model.outputs[0].name
-        if out_name not in pred_tensors:
-            return ValidationResult(status="skipped", reason="predict output missing")
-        pred = pred_tensors[out_name]
+        pred_outputs = {}
+        for out_name in output_names:
+            if out_name not in pred_tensors:
+                return ValidationResult(status="skipped", reason=f"predict output missing: {out_name}")
+            pred_outputs[out_name] = pred_tensors[out_name]
         pred_engine = "python-eval"
 
-    if model.outputs[0].dtype in ("uint8", "int8", "int16"):
+    max_abs = 0.0
+    max_rel = 0.0
+    engine = f"{pred_engine} vs {ref_engine}"
+    for out_tensor in model.outputs:
+        out_name = out_tensor.name
+        if out_name not in ref_outputs:
+            return ValidationResult(status="failed", reason=f"reference output missing: {out_name}", engine=engine)
+        if out_name not in pred_outputs:
+            return ValidationResult(status="failed", reason=f"predict output missing: {out_name}", engine=engine)
+
+        pred = np.asarray(pred_outputs[out_name])
+        ref = np.asarray(ref_outputs[out_name])
         if pred.shape != ref.shape:
-            return ValidationResult(status="failed", reason="output shape mismatch", engine=f"{pred_engine} vs {ref_engine}")
-        pred_i64 = pred.astype(np.int64)
-        ref_i64 = ref.astype(np.int64)
-        diff = np.abs(pred_i64 - ref_i64)
-        max_diff = float(np.max(diff)) if diff.size else 0.0
-        tol = float(int8_atol if model.outputs[0].dtype in ("uint8", "int8") else int16_atol)
-        if max_diff > tol:
             return ValidationResult(
                 status="failed",
-                reason="output mismatch",
-                max_abs=max_diff,
-                engine=f"{pred_engine} vs {ref_engine}",
+                reason=f"output shape mismatch: {out_name}",
+                engine=engine,
             )
-        return ValidationResult(
-            status="passed",
-            max_abs=max_diff,
-            engine=f"{pred_engine} vs {ref_engine}",
-        )
 
-    pred_f = pred.astype(np.float32)
-    ref_f = np.array(ref, dtype=np.float32)
-    if pred_f.shape != ref_f.shape:
-        return ValidationResult(status="failed", reason="output shape mismatch", engine=f"{pred_engine} vs {ref_engine}")
-    if not np.allclose(pred_f, ref_f, rtol=rtol, atol=atol):
-        abs_err = np.max(np.abs(pred_f - ref_f))
-        rel_err = np.max(np.abs(pred_f - ref_f) / (np.abs(ref_f) + 1e-8))
-        return ValidationResult(
-            status="failed",
-            reason="output mismatch",
-            max_abs=float(abs_err),
-            max_rel=float(rel_err),
-            engine=f"{pred_engine} vs {ref_engine}",
+        if out_tensor.dtype in ("uint8", "int8", "int16", "int32", "int64", "bool"):
+            if out_tensor.dtype == "bool":
+                pred_i64 = pred.astype(np.uint8).astype(np.int64)
+                ref_i64 = ref.astype(np.uint8).astype(np.int64)
+            else:
+                pred_i64 = pred.astype(np.int64)
+                ref_i64 = ref.astype(np.int64)
+            diff = np.abs(pred_i64 - ref_i64)
+            max_diff = float(np.max(diff)) if diff.size else 0.0
+            if out_tensor.dtype in ("uint8", "int8"):
+                tol = float(int8_atol)
+            elif out_tensor.dtype == "int16":
+                tol = float(int16_atol)
+            else:
+                tol = 0.0
+            max_abs = max(max_abs, max_diff)
+            if max_diff > tol:
+                return ValidationResult(
+                    status="failed",
+                    reason=f"output mismatch: {out_name}",
+                    max_abs=max_diff,
+                    engine=engine,
+                )
+            continue
+
+        pred_f = pred.astype(np.float32)
+        ref_f = np.asarray(ref, dtype=np.float32)
+        if not np.allclose(pred_f, ref_f, rtol=rtol, atol=atol):
+            abs_err = np.max(np.abs(pred_f - ref_f))
+            rel_err = np.max(np.abs(pred_f - ref_f) / (np.abs(ref_f) + 1e-8))
+            return ValidationResult(
+                status="failed",
+                reason=f"output mismatch: {out_name}",
+                max_abs=float(abs_err),
+                max_rel=float(rel_err),
+                engine=engine,
+            )
+        abs_err = float(np.max(np.abs(pred_f - ref_f))) if pred_f.size else 0.0
+        rel_err = (
+            float(np.max(np.abs(pred_f - ref_f) / (np.abs(ref_f) + 1e-8)))
+            if pred_f.size
+            else 0.0
         )
-    abs_err = float(np.max(np.abs(pred_f - ref_f))) if pred_f.size else 0.0
-    rel_err = float(np.max(np.abs(pred_f - ref_f) / (np.abs(ref_f) + 1e-8))) if pred_f.size else 0.0
-    return ValidationResult(
-        status="passed",
-        max_abs=abs_err,
-        max_rel=rel_err,
-        engine=f"{pred_engine} vs {ref_engine}",
-    )
+        max_abs = max(max_abs, abs_err)
+        max_rel = max(max_rel, rel_err)
+
+    return ValidationResult(status="passed", max_abs=max_abs, max_rel=max_rel, engine=engine)

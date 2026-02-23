@@ -34,7 +34,7 @@ def emit_scatter_elements(ctx: EmitContext, node: NodeInfo) -> None:
 
     data_dtype = ctx.dtype(data_name)
     if ctx.dtype(out_name) != data_dtype or ctx.dtype(upd_name) != data_dtype:
-        raise ValueError("ScatterElements requires data/update/output dtype一致.")
+        raise ValueError("ScatterElements requires matching data/update/output dtype.")
     if ctx.dtype(idx_name) not in ("int8", "int16", "int32", "int64"):
         raise ValueError("ScatterElements indices dtype must be integer.")
 

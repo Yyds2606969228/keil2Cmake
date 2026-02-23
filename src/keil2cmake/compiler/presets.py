@@ -9,7 +9,11 @@ from ..keil.config import (
     get_checkcpp_path,
     get_openocd_path,
 )
-from .debug import infer_openocd_target
+from .debug import (
+    infer_openocd_target,
+    infer_openocd_interface,
+    infer_openocd_transport,
+)
 from ..common import norm_path
 from ..template_engine import write_template
 
@@ -30,10 +34,11 @@ def generate_cmake_presets(project_root: str, project_data: dict | None = None):
 
     major = cmake_min_version.split('.')[0]
     minor = cmake_min_version.split('.')[1] if '.' in cmake_min_version else '20'
-
     device = ''
+    debugger = ''
     if project_data:
         device = str(project_data.get('device', '') or '')
+        debugger = str(project_data.get('debugger', '') or '')
 
     write_template(
         'CMakePresets.json.j2',
@@ -44,8 +49,9 @@ def generate_cmake_presets(project_root: str, project_data: dict | None = None):
             'cmake_executable': cmake_executable,
             'checkcpp_path': norm_path(checkcpp_path),
             'openocd_path': norm_path(openocd_path),
-            'debug_probe': '',
             'openocd_target': infer_openocd_target(device),
+            'openocd_interface': infer_openocd_interface(debugger),
+            'openocd_transport': infer_openocd_transport(debugger),
             'cmake_make_program': cmake_make_program,
         },
         os.path.join(project_root, 'CMakePresets.json'),

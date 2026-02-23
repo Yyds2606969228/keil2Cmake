@@ -34,6 +34,80 @@ def _detect_keil_compiler(root: ET.Element) -> str:
     return 'armclang' if use_armclang else 'armcc'
 
 
+def _infer_debugger_from_text(text: str) -> str:
+    if not text:
+        return ''
+    lowered = str(text).lower()
+    normalized = lowered.replace('\\', '/').replace('_', '-')
+
+    # Keep explicit probes first to reduce accidental matches.
+    jlink_tokens = ('j-link', 'jlink', 'jl2cm3', 'jltagdi', 'segger')
+    stlink_tokens = ('st-link', 'stlink', 'st-linkiii-keil-swo')
+    daplink_tokens = (
+        'daplink',
+        'cmsis-dap',
+        'cmsis-agdi',
+        'cmsis_agdi',
+        'ul2cm3',
+        'ulp2cm3',
+        'ulink',
+    )
+
+    if any(token in normalized for token in jlink_tokens):
+        return 'jlink'
+    if any(token in normalized for token in stlink_tokens):
+        return 'stlink'
+    if any(token in normalized for token in daplink_tokens):
+        return 'daplink'
+    return ''
+
+
+def _detect_debugger(root: ET.Element, uvprojx_path: str) -> str:
+    candidate_paths = [
+        './/TargetDriverDllRegistry/SetRegEntry/Key',
+        './/TargetDriverDllRegistry/SetRegEntry/Name',
+        './/DebugOpt/pMon',
+        './/DebugOpt/tDll',
+        './/DebugOpt/tDlgDll',
+        './/DebugOpt/tIfile',
+        './/DebugOpt/sDll',
+        './/DebugOpt/sDlgDll',
+        './/DebugOpt/sIfile',
+        './/Utilities/Flash2',
+    ]
+
+    for path in candidate_paths:
+        for node in root.findall(path):
+            text = node.text or ''
+            inferred = _infer_debugger_from_text(text)
+            if inferred:
+                return inferred
+
+    # Fallback: scan project XML text for known probe tokens.
+    try:
+        with open(uvprojx_path, 'r', encoding='utf-8', errors='ignore') as f:
+            inferred = _infer_debugger_from_text(f.read())
+            if inferred:
+                return inferred
+    except OSError:
+        pass
+
+    # Keil often stores user debug probe selection in sibling .uvoptx/.uvopt.
+    stem, _ = os.path.splitext(uvprojx_path)
+    for ext in ('.uvoptx', '.uvopt'):
+        opt_path = stem + ext
+        if not os.path.exists(opt_path):
+            continue
+        try:
+            with open(opt_path, 'r', encoding='utf-8', errors='ignore') as f:
+                inferred = _infer_debugger_from_text(f.read())
+                if inferred:
+                    return inferred
+        except OSError:
+            continue
+    return ''
+
+
 def parse_uvprojx(uvprojx_path: str) -> dict:
     """解析 uvprojx 文件，提取项目信息。"""
     tree = ET.parse(uvprojx_path)
@@ -80,6 +154,10 @@ def parse_uvprojx(uvprojx_path: str) -> dict:
     keil_compiler = _detect_keil_compiler(root)
     print(f"  Keil compiler = {keil_compiler}")
 
+    debugger = _detect_debugger(root, uvprojx_path)
+    if debugger:
+        print(f"  Debugger = {debugger}")
+
     use_microlib = _find_bool(root, ['UseMicroLIB', 'UseMicroLib', 'uMicrolib', 'uMicroLIB'])
 
     print(t('uvprojx.flags'))
@@ -119,5 +197,6 @@ def parse_uvprojx(uvprojx_path: str) -> dict:
         'output_dir': output_dir,
         'keil_optim': keil_optim,  # Store raw Keil value for compiler-specific mapping
         'keil_compiler': keil_compiler,
+        'debugger': debugger,
         'use_microlib': use_microlib,
     }

@@ -59,26 +59,34 @@ SECTIONS
         __exidx_end = .;
     } > FLASH
 
-    .data : AT (ADDR(.text) + SIZEOF(.text))
+    .data : AT (ADDR(.ARM.exidx) + SIZEOF(.ARM.exidx))
     {
+        _sdata = .;
         __data_start__ = .;
         *(.data*)
+        _edata = .;
         __data_end__ = .;
     } > RAM
 
+    _sidata = LOADADDR(.data);
+
     .bss :
     {
+        _sbss = .;
         __bss_start__ = .;
         *(.bss*)
         *(COMMON)
+        _ebss = .;
         __bss_end__ = .;
     } > RAM
+
+    _estack = ORIGIN(RAM) + LENGTH(RAM);
 }
 '''.strip()
 
     default_ld_path = os.path.join(internal_dir, 'keil2cmake_default.ld')
     if not os.path.exists(default_ld_path):
-        with open(default_ld_path, 'w', encoding='utf-8-sig') as f:
+        with open(default_ld_path, 'w', encoding='utf-8') as f:
             f.write(ld_template)
 
     default_ld_file = 'keil2cmake_default.ld'
@@ -108,7 +116,7 @@ SECTIONS
             'default_ld_file': default_ld_file,
         },
         os.path.join(internal_dir, 'toolchain.cmake'),
-        encoding='utf-8-sig',
+        encoding='utf-8',
     )
 
     # Check and clean BOM from user's linker script if provided

@@ -513,8 +513,8 @@ def _build_qdq_einsum_model(path: str, qdtype: int = TensorProto.INT8) -> None:
 def _build_unsupported_model(path: str) -> None:
     x = helper.make_tensor_value_info('input', TensorProto.FLOAT, [2, 3])
     y = helper.make_tensor_value_info('output', TensorProto.FLOAT, [2, 3])
-    node = helper.make_node('RandomUniformLike', inputs=['input'], outputs=['output'], low=0.0, high=1.0)
-    graph = helper.make_graph([node], 'random_uniform_like_unsupported_test', [x], [y])
+    node = helper.make_node('CustomUnsupportedOp', inputs=['input'], outputs=['output'])
+    graph = helper.make_graph([node], 'custom_unsupported_test', [x], [y])
     model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid('', 13)])
     onnx.save(model, path)
 
@@ -3044,6 +3044,39 @@ def _build_topk_model(path: str) -> None:
     onnx.save(model, path)
 
 
+def _build_topk_int32_precision_model(path: str) -> None:
+    dummy = helper.make_tensor_value_info('dummy', TensorProto.FLOAT, [1])
+    values = helper.make_tensor_value_info('values', TensorProto.INT32, [1])
+    indices = helper.make_tensor_value_info('indices', TensorProto.INT64, [1])
+
+    const_x = numpy_helper.from_array(
+        np.array([16777216, 16777217], dtype=np.int32),
+        name='const_x',
+    )
+    k = numpy_helper.from_array(np.array([1], dtype=np.int64), name='k')
+
+    node_topk = helper.make_node(
+        'TopK',
+        inputs=['const_x', 'k'],
+        outputs=['values', 'indices'],
+        axis=0,
+        largest=1,
+        sorted=1,
+    )
+    node_dummy = helper.make_node('Identity', inputs=['dummy'], outputs=['dummy_out'])
+
+    graph = helper.make_graph(
+        [node_topk, node_dummy],
+        'topk_int32_precision_test',
+        [dummy],
+        [values, indices],
+        [const_x, k],
+        value_info=[helper.make_tensor_value_info('dummy_out', TensorProto.FLOAT, [1])],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid('', 13)])
+    onnx.save(model, path)
+
+
 class TestTinyMlProject(unittest.TestCase):
     def _assert_model_consistency_regression(
         self,
@@ -3101,8 +3134,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -3125,8 +3156,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='ram',
                 emit='c',
             )
@@ -3144,8 +3173,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -3164,8 +3191,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -3183,8 +3208,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -3193,88 +3216,6 @@ class TestTinyMlProject(unittest.TestCase):
             source = Path(result['source']).read_text(encoding='utf-8')
             self.assertIn('LeakyRelu', manifest)
             self.assertIn('int8_t', source)
-
-    def test_cmsis_nn_backend_skeleton(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'model.onnx')
-            _build_qdq_matmul_model(model_path, TensorProto.INT8)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int8',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('K2C_USE_CMSIS_NN', source)
-            self.assertIn('arm_nn_vec_mat_mult_t_s8', source)
-
-    def test_cmsis_nn_backend_fp32_fallback_to_c(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'model.onnx')
-            _build_simple_gemm_model(model_path)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='fp32',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            manifest = Path(result['manifest']).read_text(encoding='utf-8')
-            self.assertNotIn('arm_nn_vec_mat_mult_t_s8', source)
-            self.assertIn('"backend": "c"', manifest)
-
-    def test_cmsis_nn_manifest_fallback_reasons(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'model.onnx')
-            _build_gemm_softmax_model(model_path)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='fp32',
-                weights='flash',
-                emit='c',
-            )
-
-            manifest = json.loads(Path(result['manifest']).read_text(encoding='utf-8'))
-            op_backends = manifest.get('op_backends', [])
-            reasons = [e.get('fallback_reason', '') for e in op_backends if e.get('backend') == 'c']
-            self.assertTrue(any('constraints not satisfied' in r for r in reasons))
-            self.assertTrue(any('not implemented' in r for r in reasons))
-            self.assertIn('fallback_stats', manifest)
-            self.assertTrue(manifest['fallback_stats'])
-
-    def test_cmsis_nn_backend_int16_fallback_to_c(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'model.onnx')
-            _build_qdq_matmul_model(model_path, TensorProto.INT16)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int16',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            manifest = Path(result['manifest']).read_text(encoding='utf-8')
-            self.assertNotIn('arm_nn_vec_mat_mult_t_s8', source)
-            self.assertIn('"backend": "c"', manifest)
 
     def test_int8_quant_pow(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -3285,8 +3226,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -3305,8 +3244,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -3315,42 +3252,6 @@ class TestTinyMlProject(unittest.TestCase):
             source = Path(result['source']).read_text(encoding='utf-8')
             self.assertIn('Conv', manifest)
             self.assertIn('int8_t', source)
-
-    def test_cmsis_nn_conv(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_conv.onnx')
-            _build_qdq_conv_model(model_path, TensorProto.INT8)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int8',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('arm_convolve_wrapper_s8', source)
-
-    def test_cmsis_nn_depthwise_conv(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_dwconv.onnx')
-            _build_qdq_depthwise_conv_model(model_path, TensorProto.INT8)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int8',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('arm_depthwise_conv_wrapper_s8', source)
 
     def test_int8_quant_group_conv(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -3361,8 +3262,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -3370,33 +3269,6 @@ class TestTinyMlProject(unittest.TestCase):
             source = Path(result['source']).read_text(encoding='utf-8')
             self.assertIn('size_t g = oc / 3;', source)
             self.assertIn('size_t ic_begin = g * 2;', source)
-
-    def test_cmsis_nn_group_conv_fallback_to_c(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_group_conv.onnx')
-            _build_qdq_group_conv_model(model_path, TensorProto.INT8)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int8',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            manifest = json.loads(Path(result['manifest']).read_text(encoding='utf-8'))
-            op_backends = manifest.get('op_backends', [])
-            conv_entries = [entry for entry in op_backends if entry.get('op') == 'Conv']
-            self.assertTrue(conv_entries)
-            self.assertTrue(any(entry.get('backend') == 'c' for entry in conv_entries))
-            self.assertTrue(
-                any('constraints not satisfied' in entry.get('fallback_reason', '') for entry in conv_entries)
-            )
-            self.assertNotIn('arm_convolve_wrapper_s8', source)
-            self.assertNotIn('arm_depthwise_conv_wrapper_s8', source)
 
     def test_consistency_regression_group_conv_c(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -3406,8 +3278,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -3418,243 +3288,6 @@ class TestTinyMlProject(unittest.TestCase):
                 rtol=1e-3,
                 atol=1e-4,
             )
-
-    def test_consistency_regression_group_conv_cmsis_nn(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'group_conv_consistency_cmsis.onnx')
-            _build_group_conv_model(model_path)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='fp32',
-                weights='flash',
-                emit='c',
-            )
-            self._assert_model_consistency_regression(
-                model_path,
-                result,
-                seeds=(0, 1),
-                rtol=1e-3,
-                atol=1e-4,
-            )
-
-    def test_cmsis_nn_add_int8(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_add.onnx')
-            _build_qdq_add_model(model_path, TensorProto.INT8)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int8',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('arm_elementwise_add_s8', source)
-
-    def test_cmsis_nn_add_int16(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_add_i16.onnx')
-            _build_qdq_add_model(model_path, TensorProto.INT16)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int16',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('arm_elementwise_add_s16', source)
-
-    def test_cmsis_nn_mul_int8(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_mul.onnx')
-            _build_qdq_mul_model(model_path, TensorProto.INT8)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int8',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('arm_elementwise_mul_s8', source)
-
-    def test_cmsis_nn_mul_int16(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_mul_i16.onnx')
-            _build_qdq_mul_model(model_path, TensorProto.INT16)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int16',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('arm_elementwise_mul_s16', source)
-
-    def test_cmsis_nn_maxpool_int8(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_maxpool.onnx')
-            _build_qdq_maxpool_model(model_path, TensorProto.INT8)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int8',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('arm_max_pool_s8', source)
-
-    def test_cmsis_nn_maxpool_int16(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_maxpool_i16.onnx')
-            _build_qdq_maxpool_model(model_path, TensorProto.INT16)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int16',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('arm_max_pool_s16', source)
-
-    def test_cmsis_nn_avgpool_int8(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_avgpool.onnx')
-            _build_qdq_avgpool_model(model_path, TensorProto.INT8)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int8',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('arm_avgpool_s8', source)
-
-    def test_cmsis_nn_avgpool_int16(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_avgpool_i16.onnx')
-            _build_qdq_avgpool_model(model_path, TensorProto.INT16)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int16',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('arm_avgpool_s16', source)
-
-    def test_cmsis_nn_global_avgpool_int8(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_gavgpool.onnx')
-            _build_qdq_global_avgpool_model(model_path, TensorProto.INT8)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int8',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('arm_avgpool_s8', source)
-
-    def test_cmsis_nn_global_avgpool_int16(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_gavgpool_i16.onnx')
-            _build_qdq_global_avgpool_model(model_path, TensorProto.INT16)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int16',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('arm_avgpool_s16', source)
-
-    def test_cmsis_nn_global_maxpool_int8(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_gmaxpool.onnx')
-            _build_qdq_global_maxpool_model(model_path, TensorProto.INT8)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int8',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('arm_max_pool_s8', source)
-
-    def test_cmsis_nn_global_maxpool_int16(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_gmaxpool_i16.onnx')
-            _build_qdq_global_maxpool_model(model_path, TensorProto.INT16)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int16',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('arm_max_pool_s16', source)
 
     def test_int8_quant_global_avgpool_nd_c(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -3664,8 +3297,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -3681,8 +3312,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -3698,8 +3327,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -3714,49 +3341,11 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
             manifest = Path(result['manifest']).read_text(encoding='utf-8')
             self.assertIn('MaxPool', manifest)
-
-    def test_cmsis_nn_relu_int8(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_relu.onnx')
-            _build_qdq_relu_model(model_path, TensorProto.INT8)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int8',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('arm_relu_q7', source)
-
-    def test_cmsis_nn_relu_int16(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'cmsis_relu_i16.onnx')
-            _build_qdq_relu_model(model_path, TensorProto.INT16)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int16',
-                weights='flash',
-                emit='c',
-            )
-
-            source = Path(result['source']).read_text(encoding='utf-8')
-            self.assertIn('arm_relu_q15', source)
 
     def test_int16_quant_conv(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -3767,8 +3356,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int16',
                 weights='flash',
                 emit='c',
             )
@@ -3787,8 +3374,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -3807,8 +3392,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int16',
                 weights='flash',
                 emit='c',
             )
@@ -3827,8 +3410,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -3847,8 +3428,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int16',
                 weights='flash',
                 emit='c',
             )
@@ -3867,8 +3446,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -3887,8 +3464,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -3907,8 +3482,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -3927,8 +3500,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -3948,8 +3519,6 @@ class TestTinyMlProject(unittest.TestCase):
                 result = generate_tinyml_project(
                     model_path,
                     out_root,
-                    backend='c',
-                    quant='int8',
                     weights='flash',
                     emit='c',
                 )
@@ -3968,8 +3537,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -3988,8 +3555,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int16',
                 weights='flash',
                 emit='c',
             )
@@ -4008,23 +3573,6 @@ class TestTinyMlProject(unittest.TestCase):
                 generate_tinyml_project(
                     model_path,
                     out_root,
-                    backend='c',
-                    quant='fp32',
-                    weights='flash',
-                    emit='c',
-                )
-
-    def test_unsupported_operator_for_cmsis_nn(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'model.onnx')
-            _build_unsupported_model(model_path)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-            with self.assertRaises(ValueError):
-                generate_tinyml_project(
-                    model_path,
-                    out_root,
-                    backend='cmsis-nn',
-                    quant='fp32',
                     weights='flash',
                     emit='c',
                 )
@@ -4037,8 +3585,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4052,8 +3598,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4068,8 +3612,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4085,8 +3627,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4100,8 +3640,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4116,8 +3654,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4132,8 +3668,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4150,8 +3684,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4168,8 +3700,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4186,8 +3716,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4202,8 +3730,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4220,8 +3746,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4236,8 +3760,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4251,8 +3773,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4266,8 +3786,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4282,8 +3800,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4297,8 +3813,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4313,8 +3827,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4329,8 +3841,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4344,8 +3854,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4362,29 +3870,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
-                weights='flash',
-                emit='c',
-            )
-            self._assert_model_consistency_regression(
-                model_path,
-                result,
-                seeds=(0, 1),
-                rtol=1e-3,
-                atol=1e-4,
-            )
-
-    def test_consistency_regression_resnet_like_cmsis_nn(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'resnet_like_consistency_cmsis.onnx')
-            _build_resnet_like_model(model_path)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4404,8 +3889,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4422,29 +3905,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
-                weights='flash',
-                emit='c',
-            )
-            self._assert_model_consistency_regression(
-                model_path,
-                result,
-                seeds=(0, 1),
-                rtol=1e-3,
-                atol=1e-4,
-            )
-
-    def test_consistency_regression_mobilenet_like_cmsis_nn(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'mobilenet_like_consistency_cmsis.onnx')
-            _build_mobilenetv2_like_model(model_path)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4464,8 +3924,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4479,8 +3937,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4501,8 +3957,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4519,8 +3973,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4534,8 +3986,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4549,8 +3999,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4564,8 +4012,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4581,8 +4027,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4598,8 +4042,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4614,8 +4056,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4631,8 +4071,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4647,8 +4085,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4664,8 +4100,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4681,8 +4115,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4698,8 +4130,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4715,8 +4145,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4732,8 +4160,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4750,8 +4176,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4768,8 +4192,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4787,8 +4209,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4805,8 +4225,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4825,8 +4243,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4846,8 +4262,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4866,8 +4280,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4884,8 +4296,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4902,8 +4312,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4921,8 +4329,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4940,8 +4346,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4955,8 +4359,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4973,8 +4375,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -4988,8 +4388,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5006,8 +4404,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5024,8 +4420,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5042,8 +4436,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5060,8 +4452,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5078,8 +4468,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5111,8 +4499,6 @@ class TestTinyMlProject(unittest.TestCase):
                 generate_tinyml_project(
                     model_path,
                     out_root,
-                    backend='c',
-                    quant='fp32',
                     weights='flash',
                     emit='c',
                 )
@@ -5134,8 +4520,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5174,8 +4558,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5192,8 +4574,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5210,8 +4590,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5228,8 +4606,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5246,8 +4622,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5270,8 +4644,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5294,8 +4666,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5312,8 +4682,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5327,8 +4695,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5342,8 +4708,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5361,8 +4725,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5379,8 +4741,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5398,8 +4758,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5416,8 +4774,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5434,8 +4790,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5468,8 +4822,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5492,8 +4844,6 @@ class TestTinyMlProject(unittest.TestCase):
                 result = generate_tinyml_project(
                     model_path,
                     out_root,
-                    backend='c',
-                    quant='int8',
                     weights='flash',
                     emit='c',
                 )
@@ -5516,8 +4866,6 @@ class TestTinyMlProject(unittest.TestCase):
                 result = generate_tinyml_project(
                     model_path,
                     out_root,
-                    backend='c',
-                    quant='int16',
                     weights='flash',
                     emit='c',
                 )
@@ -5534,8 +4882,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5552,8 +4898,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5570,8 +4914,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5589,8 +4931,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5607,8 +4947,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5626,8 +4964,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5645,8 +4981,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5664,8 +4998,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5681,8 +5013,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5698,8 +5028,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5714,8 +5042,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5730,8 +5056,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5749,8 +5073,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5769,8 +5091,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5787,8 +5107,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5806,8 +5124,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='int8',
                 weights='flash',
                 emit='c',
             )
@@ -5824,8 +5140,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5839,8 +5153,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5854,8 +5166,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5869,8 +5179,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5884,8 +5192,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5903,8 +5209,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5920,8 +5224,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5937,8 +5239,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5953,8 +5253,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5969,8 +5267,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -5985,35 +5281,11 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
             manifest = Path(result['manifest']).read_text(encoding='utf-8')
             self.assertIn('Upsample', manifest)
-
-    def test_cmsis_nn_identity_reshape_int8(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            model_path = os.path.join(td, 'qdq_identity_reshape.onnx')
-            _build_qdq_identity_reshape_model(model_path, TensorProto.INT8)
-            out_root = os.path.join(td, 'onnx-for-mcu')
-            result = generate_tinyml_project(
-                model_path,
-                out_root,
-                backend='cmsis-nn',
-                quant='int8',
-                weights='flash',
-                emit='c',
-            )
-            manifest = json.loads(Path(result['manifest']).read_text(encoding='utf-8'))
-            op_backends = manifest.get('op_backends', [])
-            identity_backend = [x for x in op_backends if x.get('op') == 'Identity']
-            reshape_backend = [x for x in op_backends if x.get('op') == 'Reshape']
-            self.assertTrue(identity_backend)
-            self.assertTrue(reshape_backend)
-            self.assertEqual(identity_backend[0].get('backend'), 'cmsis-nn')
-            self.assertEqual(reshape_backend[0].get('backend'), 'cmsis-nn')
 
     def test_constant_model(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -6023,8 +5295,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -6039,8 +5309,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -6055,8 +5323,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -6071,8 +5337,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -6087,8 +5351,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -6103,8 +5365,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -6119,8 +5379,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -6135,8 +5393,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -6163,8 +5419,6 @@ class TestTinyMlProject(unittest.TestCase):
                 result = generate_tinyml_project(
                     model_path,
                     out_root,
-                    backend='c',
-                    quant='fp32',
                     weights='flash',
                     emit='c',
                 )
@@ -6191,8 +5445,6 @@ class TestTinyMlProject(unittest.TestCase):
                 result = generate_tinyml_project(
                     model_path,
                     out_root,
-                    backend='c',
-                    quant='fp32',
                     weights='flash',
                     emit='c',
                 )
@@ -6207,8 +5459,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -6223,8 +5473,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -6239,8 +5487,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -6255,13 +5501,40 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
             manifest = Path(result['manifest']).read_text(encoding='utf-8')
             self.assertIn('TopK', manifest)
+
+    def test_topk_int32_precision_consistency(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            model_path = os.path.join(td, 'topk_int32_precision.onnx')
+            _build_topk_int32_precision_model(model_path)
+            model = load_onnx_model(model_path)
+            out = _eval_model(model, {'dummy': np.array([0.0], dtype=np.float32)})
+            np.testing.assert_array_equal(out['values'], np.array([16777217], dtype=np.int32))
+            np.testing.assert_array_equal(out['indices'], np.array([1], dtype=np.int64))
+
+            out_root = os.path.join(td, 'onnx-for-mcu')
+            result = generate_tinyml_project(
+                model_path,
+                out_root,
+                weights='flash',
+                emit='c',
+            )
+            source = Path(result['source']).read_text(encoding='utf-8')
+            self.assertNotIn('float cur = (float)', source)
+            self._assert_model_consistency_regression(
+                model_path,
+                result,
+                seeds=(0,),
+                rtol=0.0,
+                atol=0.0,
+                int8_atol=0.0,
+                int16_atol=0.0,
+                require_onnxruntime=False,
+            )
 
     def test_non_max_suppression_model(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -6287,8 +5560,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -6321,8 +5592,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -6347,8 +5616,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -6371,8 +5638,6 @@ class TestTinyMlProject(unittest.TestCase):
             result = generate_tinyml_project(
                 model_path,
                 out_root,
-                backend='c',
-                quant='fp32',
                 weights='flash',
                 emit='c',
             )
@@ -6380,3 +5645,4 @@ class TestTinyMlProject(unittest.TestCase):
             manifest = Path(result['manifest']).read_text(encoding='utf-8')
             self.assertIn('RoiAlign', manifest)
             self.assertIn('samp_h', source)
+

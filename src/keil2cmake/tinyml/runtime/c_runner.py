@@ -19,6 +19,7 @@ class CRunResult:
     ok: bool
     reason: str = ""
     output: np.ndarray | None = None
+    outputs: dict[str, np.ndarray] | None = None
 
 
 def _dtype_to_numpy(dtype: str):
@@ -30,6 +31,12 @@ def _dtype_to_numpy(dtype: str):
         return np.int8
     if dtype == "int16":
         return np.int16
+    if dtype == "int32":
+        return np.int32
+    if dtype == "int64":
+        return np.int64
+    if dtype == "bool":
+        return np.bool_
     return None
 
 
@@ -42,6 +49,12 @@ def _dtype_to_c(dtype: str) -> str | None:
         return "int8_t"
     if dtype == "int16":
         return "int16_t"
+    if dtype == "int32":
+        return "int32_t"
+    if dtype == "int64":
+        return "int64_t"
+    if dtype == "bool":
+        return "uint8_t"
     return None
 
 
@@ -58,7 +71,7 @@ def _find_host_compiler() -> str | None:
     return None
 
 
-def _runner_source(header_basename: str, input_ctype: str, output_ctype: str) -> str:
+def _runner_source(header_basename: str) -> str:
     return (
         "#include <stdint.h>\n"
         "#include <stdio.h>\n"
@@ -74,23 +87,106 @@ def _runner_source(header_basename: str, input_ctype: str, output_ctype: str) ->
         "  if (!fi) {\n"
         "    return 3;\n"
         "  }\n"
-        f"  {input_ctype} input[K2C_INPUT_SIZE];\n"
-        f"  {output_ctype} output[K2C_OUTPUT_SIZE];\n"
-        "  size_t n_in = fread(input, sizeof(input[0]), K2C_INPUT_SIZE, fi);\n"
-        "  fclose(fi);\n"
-        "  if (n_in != K2C_INPUT_SIZE) {\n"
+        "  size_t n_in = 0;\n"
+        "  size_t n_out = 0;\n"
+        "  const k2c_io_desc_t* in_desc = k2c_get_input_desc(&n_in);\n"
+        "  const k2c_io_desc_t* out_desc = k2c_get_output_desc(&n_out);\n"
+        "  if (!in_desc || !out_desc || n_in == 0 || n_out == 0) {\n"
+        "    fclose(fi);\n"
         "    return 4;\n"
         "  }\n"
-        "  k2c_forward(input, output);\n"
-        "  FILE* fo = fopen(out_path, \"wb\");\n"
-        "  if (!fo) {\n"
+        "  const void** input_ptrs = (const void**)calloc(n_in, sizeof(void*));\n"
+        "  void** output_ptrs = (void**)calloc(n_out, sizeof(void*));\n"
+        "  void** input_bufs = (void**)calloc(n_in, sizeof(void*));\n"
+        "  void** output_bufs = (void**)calloc(n_out, sizeof(void*));\n"
+        "  if (!input_ptrs || !output_ptrs || !input_bufs || !output_bufs) {\n"
+        "    fclose(fi);\n"
+        "    free((void*)input_ptrs);\n"
+        "    free(output_ptrs);\n"
+        "    free(input_bufs);\n"
+        "    free(output_bufs);\n"
         "    return 5;\n"
         "  }\n"
-        "  size_t n_out = fwrite(output, sizeof(output[0]), K2C_OUTPUT_SIZE, fo);\n"
-        "  fclose(fo);\n"
-        "  if (n_out != K2C_OUTPUT_SIZE) {\n"
-        "    return 6;\n"
+        "  for (size_t i = 0; i < n_in; ++i) {\n"
+        "    size_t bytes = in_desc[i].elem_size * in_desc[i].size;\n"
+        "    if (bytes == 0) {\n"
+        "      bytes = 1;\n"
+        "    }\n"
+        "    input_bufs[i] = malloc(bytes);\n"
+        "    if (!input_bufs[i]) {\n"
+        "      fclose(fi);\n"
+        "      for (size_t j = 0; j < i; ++j) free(input_bufs[j]);\n"
+        "      free((void*)input_ptrs);\n"
+        "      free(output_ptrs);\n"
+        "      free(input_bufs);\n"
+        "      free(output_bufs);\n"
+        "      return 6;\n"
+        "    }\n"
+        "    size_t n_read = fread(input_bufs[i], 1, bytes, fi);\n"
+        "    if (n_read != bytes) {\n"
+        "      fclose(fi);\n"
+        "      for (size_t j = 0; j <= i; ++j) free(input_bufs[j]);\n"
+        "      free((void*)input_ptrs);\n"
+        "      free(output_ptrs);\n"
+        "      free(input_bufs);\n"
+        "      free(output_bufs);\n"
+        "      return 7;\n"
+        "    }\n"
+        "    input_ptrs[i] = input_bufs[i];\n"
         "  }\n"
+        "  fclose(fi);\n"
+        "  for (size_t i = 0; i < n_out; ++i) {\n"
+        "    size_t bytes = out_desc[i].elem_size * out_desc[i].size;\n"
+        "    if (bytes == 0) {\n"
+        "      bytes = 1;\n"
+        "    }\n"
+        "    output_bufs[i] = malloc(bytes);\n"
+        "    if (!output_bufs[i]) {\n"
+        "      for (size_t j = 0; j < n_in; ++j) free(input_bufs[j]);\n"
+        "      for (size_t j = 0; j < i; ++j) free(output_bufs[j]);\n"
+        "      free((void*)input_ptrs);\n"
+        "      free(output_ptrs);\n"
+        "      free(input_bufs);\n"
+        "      free(output_bufs);\n"
+        "      return 8;\n"
+        "    }\n"
+        "    output_ptrs[i] = output_bufs[i];\n"
+        "  }\n"
+        "  k2c_forward(input_ptrs, output_ptrs);\n"
+        "  FILE* fo = fopen(out_path, \"wb\");\n"
+        "  if (!fo) {\n"
+        "    for (size_t i = 0; i < n_in; ++i) free(input_bufs[i]);\n"
+        "    for (size_t i = 0; i < n_out; ++i) free(output_bufs[i]);\n"
+        "    free((void*)input_ptrs);\n"
+        "    free(output_ptrs);\n"
+        "    free(input_bufs);\n"
+        "    free(output_bufs);\n"
+        "    return 9;\n"
+        "  }\n"
+        "  for (size_t i = 0; i < n_out; ++i) {\n"
+        "    size_t bytes = out_desc[i].elem_size * out_desc[i].size;\n"
+        "    if (bytes == 0) {\n"
+        "      bytes = 1;\n"
+        "    }\n"
+        "    size_t n_written = fwrite(output_bufs[i], 1, bytes, fo);\n"
+        "    if (n_written != bytes) {\n"
+        "      fclose(fo);\n"
+        "      for (size_t j = 0; j < n_in; ++j) free(input_bufs[j]);\n"
+        "      for (size_t j = 0; j < n_out; ++j) free(output_bufs[j]);\n"
+        "      free((void*)input_ptrs);\n"
+        "      free(output_ptrs);\n"
+        "      free(input_bufs);\n"
+        "      free(output_bufs);\n"
+        "      return 10;\n"
+        "    }\n"
+        "  }\n"
+        "  fclose(fo);\n"
+        "  for (size_t i = 0; i < n_in; ++i) free(input_bufs[i]);\n"
+        "  for (size_t i = 0; i < n_out; ++i) free(output_bufs[i]);\n"
+        "  free((void*)input_ptrs);\n"
+        "  free(output_ptrs);\n"
+        "  free(input_bufs);\n"
+        "  free(output_bufs);\n"
         "  return 0;\n"
         "}\n"
     )
@@ -100,35 +196,51 @@ def run_generated_c_model(
     model: ModelIR,
     source_path: str,
     header_path: str,
-    input_data: np.ndarray,
+    input_data: np.ndarray | dict[str, np.ndarray],
     *,
     timeout_sec: float = 30.0,
 ) -> CRunResult:
-    if len(model.inputs) != 1 or len(model.outputs) != 1:
-        return CRunResult(ok=False, reason="only single input/output is supported")
-
     source = Path(source_path)
     header = Path(header_path)
     if not source.exists() or not header.exists():
         return CRunResult(ok=False, reason="generated source/header not found")
 
-    input_tensor = model.inputs[0]
-    output_tensor = model.outputs[0]
-    input_np = _dtype_to_numpy(input_tensor.dtype)
-    output_np = _dtype_to_numpy(output_tensor.dtype)
-    input_ctype = _dtype_to_c(input_tensor.dtype)
-    output_ctype = _dtype_to_c(output_tensor.dtype)
-    if input_np is None or output_np is None or input_ctype is None or output_ctype is None:
-        return CRunResult(ok=False, reason="unsupported validation dtype")
+    if isinstance(input_data, dict):
+        feed_map = dict(input_data)
+    else:
+        if len(model.inputs) != 1:
+            return CRunResult(ok=False, reason="multi-input model requires dict input")
+        feed_map = {model.inputs[0].name: input_data}
+
+    for tensor in model.inputs + model.outputs:
+        if _dtype_to_numpy(tensor.dtype) is None or _dtype_to_c(tensor.dtype) is None:
+            return CRunResult(ok=False, reason=f"unsupported validation dtype: {tensor.dtype}")
 
     compiler = _find_host_compiler()
     if not compiler:
         return CRunResult(ok=False, reason="host compiler not found")
 
-    in_shape = list(input_tensor.shape)
-    out_shape = list(output_tensor.shape)
-    in_data = np.asarray(input_data, dtype=input_np).reshape(in_shape)
-    out_count = int(np.prod(out_shape)) if out_shape else 1
+    prepared_inputs: dict[str, np.ndarray] = {}
+    for tensor in model.inputs:
+        if tensor.name not in feed_map:
+            return CRunResult(ok=False, reason=f"missing input data: {tensor.name}")
+        np_dtype = _dtype_to_numpy(tensor.dtype)
+        assert np_dtype is not None
+        shape = list(tensor.shape)
+        try:
+            arr = np.asarray(feed_map[tensor.name], dtype=np_dtype)
+            arr = arr.reshape(shape if shape else ())
+        except Exception as exc:
+            return CRunResult(ok=False, reason=f"input reshape failed for {tensor.name}: {exc}")
+        prepared_inputs[tensor.name] = arr
+
+    output_specs: list[tuple[str, object, list[int], int]] = []
+    for tensor in model.outputs:
+        np_dtype = _dtype_to_numpy(tensor.dtype)
+        assert np_dtype is not None
+        shape = list(tensor.shape)
+        count = int(np.prod(shape)) if shape else 1
+        output_specs.append((tensor.name, np_dtype, shape, count))
 
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
@@ -138,10 +250,12 @@ def run_generated_c_model(
         exe = td_path / ("k2c_runner.exe" if os.name == "nt" else "k2c_runner")
 
         runner_c.write_text(
-            _runner_source(header.name, input_ctype, output_ctype),
+            _runner_source(header.name),
             encoding="utf-8",
         )
-        in_data.reshape(-1).tofile(str(input_bin))
+        with input_bin.open("wb") as fi:
+            for tensor in model.inputs:
+                prepared_inputs[tensor.name].reshape(-1).tofile(fi)
 
         cmd = [
             compiler,
@@ -182,8 +296,16 @@ def run_generated_c_model(
         if not output_bin.exists():
             return CRunResult(ok=False, reason="runner output file missing")
 
-        out = np.fromfile(str(output_bin), dtype=output_np)
-        if out.size != out_count:
-            return CRunResult(ok=False, reason="runner output size mismatch")
-        out = out.reshape(out_shape if out_shape else ())
-        return CRunResult(ok=True, output=out)
+        outputs: dict[str, np.ndarray] = {}
+        with output_bin.open("rb") as fo:
+            for name, np_dtype, shape, count in output_specs:
+                out = np.fromfile(fo, dtype=np_dtype, count=count)
+                if out.size != count:
+                    return CRunResult(ok=False, reason=f"runner output size mismatch: {name}")
+                outputs[name] = out.reshape(shape if shape else ())
+            extra = fo.read(1)
+            if extra:
+                return CRunResult(ok=False, reason="runner output has trailing bytes")
+
+        first_output = outputs[model.outputs[0].name] if model.outputs else None
+        return CRunResult(ok=True, output=first_output, outputs=outputs)

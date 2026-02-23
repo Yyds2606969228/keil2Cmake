@@ -5,7 +5,78 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 project({{ project_name }} LANGUAGES C ASM)
 
 include(${CMAKE_SOURCE_DIR}/cmake/user/keil2cmake_user.cmake)
-include(${CMAKE_SOURCE_DIR}/cmake/internal/k2c_debug.cmake)
+if(EXISTS "${CMAKE_SOURCE_DIR}/cmake/user/cppcheck.cmake")
+    include(${CMAKE_SOURCE_DIR}/cmake/user/cppcheck.cmake)
+endif()
+
+# OpenOCD debug files (preset-driven, regenerate on each configure).
+set(_K2C_VSCODE_DIR "${CMAKE_SOURCE_DIR}/.vscode")
+set(_K2C_USER_DIR "${CMAKE_SOURCE_DIR}/cmake/user")
+set(_K2C_TPL_DIR "${CMAKE_SOURCE_DIR}/cmake/internal/templates")
+file(MAKE_DIRECTORY "${_K2C_VSCODE_DIR}")
+file(MAKE_DIRECTORY "${_K2C_USER_DIR}")
+
+if(NOT DEFINED K2C_OPENOCD_PATH OR K2C_OPENOCD_PATH STREQUAL "")
+    set(K2C_OPENOCD_PATH "openocd")
+endif()
+if(NOT DEFINED K2C_OPENOCD_INTERFACE)
+    set(K2C_OPENOCD_INTERFACE "")
+endif()
+if(NOT DEFINED K2C_OPENOCD_TRANSPORT)
+    set(K2C_OPENOCD_TRANSPORT "")
+endif()
+if(NOT DEFINED K2C_OPENOCD_TARGET)
+    set(K2C_OPENOCD_TARGET "")
+endif()
+if(NOT DEFINED K2C_GDB_PATH OR K2C_GDB_PATH STREQUAL "")
+    if(DEFINED ARMGCC_BIN AND NOT ARMGCC_BIN STREQUAL "")
+        set(K2C_GDB_PATH "${ARMGCC_BIN}/arm-none-eabi-gdb.exe")
+    else()
+        set(K2C_GDB_PATH "arm-none-eabi-gdb")
+    endif()
+endif()
+
+set(K2C_OPENOCD_INTERFACE_LINE "")
+if(NOT K2C_OPENOCD_INTERFACE STREQUAL "")
+    set(K2C_OPENOCD_INTERFACE_LINE "source [find ${K2C_OPENOCD_INTERFACE}]")
+endif()
+set(K2C_OPENOCD_TRANSPORT_LINE "")
+if(NOT K2C_OPENOCD_TRANSPORT STREQUAL "")
+    set(K2C_OPENOCD_TRANSPORT_LINE "transport select ${K2C_OPENOCD_TRANSPORT}")
+endif()
+set(K2C_OPENOCD_TARGET_LINE "")
+if(NOT K2C_OPENOCD_TARGET STREQUAL "")
+    set(K2C_OPENOCD_TARGET_LINE "source [find ${K2C_OPENOCD_TARGET}]")
+endif()
+
+string(REPLACE "\\" "/" K2C_OPENOCD_PATH "${K2C_OPENOCD_PATH}")
+string(REPLACE "\\" "/" K2C_GDB_PATH "${K2C_GDB_PATH}")
+set(K2C_DEBUG_EXECUTABLE "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.elf")
+string(REPLACE "\\" "/" K2C_DEBUG_EXECUTABLE "${K2C_DEBUG_EXECUTABLE}")
+set(K2C_OPENOCD_SEARCHDIR_JSON "")
+set(K2C_OPENOCD_SCRIPTS_ARGS "")
+
+if(EXISTS "${_K2C_TPL_DIR}/openocd.cfg.in")
+    configure_file(
+        "${_K2C_TPL_DIR}/openocd.cfg.in"
+        "${_K2C_USER_DIR}/openocd.cfg"
+        @ONLY
+    )
+endif()
+if(EXISTS "${_K2C_TPL_DIR}/launch.json.in")
+    configure_file(
+        "${_K2C_TPL_DIR}/launch.json.in"
+        "${_K2C_VSCODE_DIR}/launch.json"
+        @ONLY
+    )
+endif()
+if(EXISTS "${_K2C_TPL_DIR}/tasks.json.in")
+    configure_file(
+        "${_K2C_TPL_DIR}/tasks.json.in"
+        "${_K2C_VSCODE_DIR}/tasks.json"
+        @ONLY
+    )
+endif()
 
 message(STATUS "K2C compiler: armgcc")
 message(STATUS "K2C optimize: ${K2C_OPTIMIZE_LEVEL}")
@@ -83,9 +154,49 @@ if(DEFINED CMAKE_OBJCOPY)
 endif()
 
 # Static analysis
+if(NOT DEFINED K2C_CHECKCPP)
+    set(K2C_CHECKCPP "")
+endif()
+if(NOT DEFINED K2C_CHECKCPP_JOBS)
+    set(K2C_CHECKCPP_JOBS "")
+endif()
+if(NOT DEFINED K2C_CHECKCPP_EXCLUDES)
+    set(K2C_CHECKCPP_EXCLUDES "")
+endif()
+if(NOT DEFINED K2C_CHECKCPP_ENABLE)
+    set(K2C_CHECKCPP_ENABLE "")
+endif()
+if(NOT DEFINED K2C_CHECKCPP_ENABLE_ALL)
+    set(K2C_CHECKCPP_ENABLE_ALL OFF)
+endif()
+if(NOT DEFINED K2C_CHECKCPP_ENABLE_WARNING)
+    set(K2C_CHECKCPP_ENABLE_WARNING OFF)
+endif()
+if(NOT DEFINED K2C_CHECKCPP_ENABLE_STYLE)
+    set(K2C_CHECKCPP_ENABLE_STYLE OFF)
+endif()
+if(NOT DEFINED K2C_CHECKCPP_ENABLE_PERFORMANCE)
+    set(K2C_CHECKCPP_ENABLE_PERFORMANCE OFF)
+endif()
+if(NOT DEFINED K2C_CHECKCPP_ENABLE_PORTABILITY)
+    set(K2C_CHECKCPP_ENABLE_PORTABILITY OFF)
+endif()
+if(NOT DEFINED K2C_CHECKCPP_ENABLE_INFORMATION)
+    set(K2C_CHECKCPP_ENABLE_INFORMATION OFF)
+endif()
+if(NOT DEFINED K2C_CHECKCPP_ENABLE_UNUSED_FUNCTION)
+    set(K2C_CHECKCPP_ENABLE_UNUSED_FUNCTION OFF)
+endif()
+if(NOT DEFINED K2C_CHECKCPP_ENABLE_MISSING_INCLUDE)
+    set(K2C_CHECKCPP_ENABLE_MISSING_INCLUDE OFF)
+endif()
+if(NOT DEFINED K2C_CHECKCPP_INCONCLUSIVE)
+    set(K2C_CHECKCPP_INCONCLUSIVE OFF)
+endif()
+
 if(K2C_CHECKCPP STREQUAL "")
     add_custom_target(check
-        COMMAND ${CMAKE_COMMAND} -E echo "checkcpp not configured. Set K2C_CHECKCPP in CMakePresets.json or cmake/user/keil2cmake_user.cmake."
+        COMMAND ${CMAKE_COMMAND} -E echo "checkcpp not configured. Set K2C_CHECKCPP in CMakePresets.json or cmake/user/cppcheck.cmake."
         COMMAND ${CMAKE_COMMAND} -E false
     )
 else()
@@ -136,12 +247,53 @@ else()
     if(K2C_CHECKCPP_INCONCLUSIVE)
         list(APPEND _K2C_CHECKCPP_ARGS "--inconclusive")
     endif()
-    add_custom_target(check
-        COMMAND "${K2C_CHECKCPP}" --project "${CMAKE_CURRENT_BINARY_DIR}/compile_commands.json" ${_K2C_CHECKCPP_ARGS} ${_K2C_CHECKCPP_EXCLUDES}
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        COMMENT "Running static analysis (checkcpp)"
-        VERBATIM
+    execute_process(
+        COMMAND "${K2C_CHECKCPP}" --help
+        OUTPUT_VARIABLE _K2C_CHECKCPP_HELP
+        ERROR_VARIABLE _K2C_CHECKCPP_HELP
+        RESULT_VARIABLE _K2C_CHECKCPP_HELP_RESULT
     )
+    set(_K2C_CHECKCPP_USE_PROJECT OFF)
+    if(_K2C_CHECKCPP_HELP_RESULT EQUAL 0)
+        if(_K2C_CHECKCPP_HELP MATCHES "--project")
+            set(_K2C_CHECKCPP_USE_PROJECT ON)
+        endif()
+    endif()
+    if(_K2C_CHECKCPP_USE_PROJECT)
+        add_custom_target(check
+            COMMAND "${K2C_CHECKCPP}" "--project=${CMAKE_CURRENT_BINARY_DIR}/compile_commands.json" ${_K2C_CHECKCPP_ARGS} ${_K2C_CHECKCPP_EXCLUDES}
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            COMMENT "Running static analysis (checkcpp)"
+            VERBATIM
+        )
+    else()
+        set(_K2C_CHECKCPP_SOURCES "")
+        foreach(_k2c_src IN LISTS K2C_SOURCES)
+            get_filename_component(_k2c_ext "${_k2c_src}" EXT)
+            string(TOLOWER "${_k2c_ext}" _k2c_ext_lower)
+            if(_k2c_ext_lower STREQUAL ".c" OR _k2c_ext_lower STREQUAL ".cc" OR _k2c_ext_lower STREQUAL ".cpp" OR _k2c_ext_lower STREQUAL ".cxx")
+                list(APPEND _K2C_CHECKCPP_SOURCES "${CMAKE_SOURCE_DIR}/${_k2c_src}")
+            endif()
+        endforeach()
+        set(_K2C_CHECKCPP_INCLUDES "")
+        foreach(_k2c_inc IN LISTS K2C_INCLUDE_DIRS)
+            if(NOT _k2c_inc STREQUAL "")
+                list(APPEND _K2C_CHECKCPP_INCLUDES "-I" "${CMAKE_SOURCE_DIR}/${_k2c_inc}")
+            endif()
+        endforeach()
+        set(_K2C_CHECKCPP_DEFINES "")
+        foreach(_k2c_def IN LISTS K2C_DEFINES)
+            if(NOT _k2c_def STREQUAL "")
+                list(APPEND _K2C_CHECKCPP_DEFINES "-D${_k2c_def}")
+            endif()
+        endforeach()
+        add_custom_target(check
+            COMMAND "${K2C_CHECKCPP}" ${_K2C_CHECKCPP_ARGS} ${_K2C_CHECKCPP_EXCLUDES} ${_K2C_CHECKCPP_DEFINES} ${_K2C_CHECKCPP_INCLUDES} ${_K2C_CHECKCPP_SOURCES}
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            COMMENT "Running static analysis (checkcpp)"
+            VERBATIM
+        )
+    endif()
 endif()
 
 # Custom target to show available CMake options

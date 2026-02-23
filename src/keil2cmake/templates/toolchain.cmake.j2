@@ -24,6 +24,8 @@ set(CMAKE_ASM_COMPILER "${ARMGCC_BIN}/arm-none-eabi-gcc.exe")
 set(CMAKE_AR           "${ARMGCC_BIN}/arm-none-eabi-ar.exe")
 set(CMAKE_OBJCOPY      "${ARMGCC_BIN}/arm-none-eabi-objcopy.exe")
 set(CMAKE_SIZE         "${ARMGCC_BIN}/arm-none-eabi-size.exe")
+# Keep firmware artifact naming consistent across hosts (Windows/Linux/macOS).
+set(CMAKE_EXECUTABLE_SUFFIX ".elf")
 
 set(_K2C_COMMON_FLAGS "-mcpu={{ cpu_name }} -mthumb -ffunction-sections -fdata-sections")
 if(NOT K2C_ARMGCC_SYSROOT STREQUAL "")

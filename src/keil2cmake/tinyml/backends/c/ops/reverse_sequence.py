@@ -27,7 +27,7 @@ def emit_reverse_sequence(ctx: EmitContext, node: NodeInfo) -> None:
     x_dtype = ctx.dtype(x_name)
     out_dtype = ctx.dtype(out_name)
     if x_dtype != out_dtype:
-        raise ValueError("ReverseSequence requires input/output dtype一致.")
+        raise ValueError("ReverseSequence requires matching input/output dtype.")
     if x_dtype not in ("float32", "bool", "int8", "int16", "int32", "int64"):
         raise ValueError("ReverseSequence dtype is unsupported.")
     if ctx.dtype(seq_name) not in ("int8", "int16", "int32", "int64"):
