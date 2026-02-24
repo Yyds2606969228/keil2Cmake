@@ -5,14 +5,16 @@ from __future__ import annotations
 from ....ir import NodeInfo
 from ....operators.context import EmitContext
 from .registry import register_op
-
-
-def _decode_attr_str(value: object, default: str) -> str:
-    if value is None:
-        return default
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="ignore").lower()
-    return str(value).lower()
+from .recurrent_common import (
+    assert_rec_dtype,
+    build_activation_specs,
+    direction_and_count,
+    emit_activation_assign,
+    emit_clip,
+    emit_fill_real_zero,
+    emit_store_real,
+    read_real_expr,
+)
 
 
 @register_op("RNN")
@@ -31,32 +33,20 @@ def emit_rnn(ctx: EmitContext, node: NodeInfo) -> None:
     y_name = node.outputs[0]
     yh_name = node.outputs[1] if len(node.outputs) >= 2 and node.outputs[1] else None
 
-    for name in (x_name, w_name, r_name, y_name):
-        if ctx.dtype(name) != "float32":
-            raise ValueError("RNN currently supports float32 tensors only.")
-    if b_name is not None and ctx.dtype(b_name) != "float32":
-        raise ValueError("RNN bias dtype must be float32.")
-    if h0_name is not None and ctx.dtype(h0_name) != "float32":
-        raise ValueError("RNN initial_h dtype must be float32.")
-    if yh_name is not None and ctx.dtype(yh_name) != "float32":
-        raise ValueError("RNN Y_h dtype must be float32.")
+    assert_rec_dtype(ctx, "RNN", x_name, "X")
+    assert_rec_dtype(ctx, "RNN", w_name, "W")
+    assert_rec_dtype(ctx, "RNN", r_name, "R")
+    assert_rec_dtype(ctx, "RNN", y_name, "Y")
+    if b_name is not None:
+        assert_rec_dtype(ctx, "RNN", b_name, "B")
+    if h0_name is not None:
+        assert_rec_dtype(ctx, "RNN", h0_name, "initial_h")
+    if yh_name is not None:
+        assert_rec_dtype(ctx, "RNN", yh_name, "Y_h")
     if seq_lens_name is not None and ctx.dtype(seq_lens_name) not in ("int64", "int32"):
         raise ValueError("RNN sequence_lens dtype must be int64/int32.")
 
-    direction = _decode_attr_str(node.attrs.get("direction", "forward"), "forward")
-    if direction != "forward":
-        raise ValueError("RNN currently supports direction='forward' only.")
-
-    acts = node.attrs.get("activations", None)
-    if acts is not None:
-        act_list: list[str] = []
-        for v in acts:
-            if isinstance(v, bytes):
-                act_list.append(v.decode("utf-8", errors="ignore").lower())
-            else:
-                act_list.append(str(v).lower())
-        if not act_list or any(a not in ("tanh",) for a in act_list):
-            raise ValueError("RNN currently supports only Tanh activation.")
+    direction, expect_dirs = direction_and_count("RNN", node.attrs.get("direction", "forward"))
 
     x_shape = [int(v) for v in ctx.shape(x_name)]
     w_shape = [int(v) for v in ctx.shape(w_name)]
@@ -67,83 +57,155 @@ def emit_rnn(ctx: EmitContext, node: NodeInfo) -> None:
     t_size, b_size, i_size = x_shape
     num_dir, h_size, i_w = w_shape
     num_dir_r, h_r0, h_r1 = r_shape
-    if num_dir != 1 or num_dir_r != 1:
-        raise ValueError("RNN currently supports num_directions=1 only.")
+    if num_dir != expect_dirs or num_dir_r != expect_dirs:
+        raise ValueError("RNN num_directions does not match direction attribute.")
     if i_w != i_size or h_r0 != h_size or h_r1 != h_size:
         raise ValueError("RNN W/R shape mismatch.")
-    if y_shape != [t_size, 1, b_size, h_size]:
+    if y_shape != [t_size, num_dir, b_size, h_size]:
         raise ValueError("RNN Y output shape mismatch.")
+
+    act_specs = build_activation_specs(
+        "RNN",
+        raw_acts=node.attrs.get("activations", None),
+        raw_alpha=node.attrs.get("activation_alpha", None),
+        raw_beta=node.attrs.get("activation_beta", None),
+        expected_count=num_dir,
+        default_cycle=["tanh"],
+    )
+    clip_val = node.attrs.get("clip", None)
+    clip_sym = None
+    if clip_val is not None:
+        clip_f = float(clip_val)
+        if clip_f < 0.0:
+            raise ValueError("RNN clip must be non-negative.")
+        clip_sym = ctx.next_symbol("k2c_rnn_clip")
+        ctx.lines.append(f"  const float {clip_sym} = {clip_f:.9g}f;")
 
     if b_name is not None:
         b_shape = [int(v) for v in ctx.shape(b_name)]
-        if b_shape != [1, 2 * h_size]:
-            raise ValueError("RNN bias shape must be [1, 2*hidden_size].")
+        if b_shape != [num_dir, 2 * h_size]:
+            raise ValueError("RNN bias shape must be [num_directions, 2*hidden_size].")
     if h0_name is not None:
         h0_shape = [int(v) for v in ctx.shape(h0_name)]
-        if h0_shape != [1, b_size, h_size]:
+        if h0_shape != [num_dir, b_size, h_size]:
             raise ValueError("RNN initial_h shape mismatch.")
     if yh_name is not None:
         yh_shape = [int(v) for v in ctx.shape(yh_name)]
-        if yh_shape != [1, b_size, h_size]:
+        if yh_shape != [num_dir, b_size, h_size]:
             raise ValueError("RNN Y_h shape mismatch.")
     if seq_lens_name is not None:
-        seq_t = ctx.model.tensors.get(seq_lens_name)
-        if seq_t is None or seq_t.data is None or len(seq_t.data) != b_size:
-            raise ValueError("RNN currently requires constant sequence_lens of length batch_size.")
-        for v in seq_t.data:
-            if int(v) != t_size:
-                raise ValueError("RNN currently requires sequence_lens equal to seq_len.")
+        seq_shape = [int(v) for v in ctx.shape(seq_lens_name)]
+        if seq_shape != [b_size]:
+            raise ValueError("RNN sequence_lens shape must be [batch_size].")
 
-    x = ctx.map_ptr(x_name)
-    w = ctx.map_ptr(w_name)
-    r = ctx.map_ptr(r_name)
-    b = ctx.map_ptr(b_name) if b_name is not None else None
-    h0 = ctx.map_ptr(h0_name) if h0_name is not None else None
-    y = ctx.map_ptr(y_name)
-    yh = ctx.map_ptr(yh_name) if yh_name is not None else None
+    seq = ctx.map_ptr(seq_lens_name) if seq_lens_name is not None else None
 
     h_state = ctx.next_symbol("k2c_rnn_h")
     h_next = ctx.next_symbol("k2c_rnn_hn")
 
-    ctx.lines.append(f"  float {h_state}[{b_size} * {h_size}];")
-    ctx.lines.append(f"  float {h_next}[{b_size} * {h_size}];")
-    if h0 is not None:
-        ctx.lines.append(f"  for (size_t b_i = 0; b_i < {b_size}; ++b_i) {{")
-        ctx.lines.append(f"    for (size_t h_i = 0; h_i < {h_size}; ++h_i) {{")
-        ctx.lines.append(f"      {h_state}[b_i * {h_size} + h_i] = {h0}[(0 * {b_size} + b_i) * {h_size} + h_i];")
+    ctx.lines.append(f"  float {h_state}[{num_dir} * {b_size} * {h_size}];")
+    ctx.lines.append(f"  float {h_next}[{h_size}];")
+    if h0_name is not None:
+        ctx.lines.append(f"  for (size_t d_i = 0; d_i < {num_dir}; ++d_i) {{")
+        ctx.lines.append(f"    for (size_t b_i = 0; b_i < {b_size}; ++b_i) {{")
+        ctx.lines.append(f"      for (size_t h_i = 0; h_i < {h_size}; ++h_i) {{")
+        ctx.lines.append(
+            f"        {h_state}[(d_i * {b_size} + b_i) * {h_size} + h_i] = "
+            f"{read_real_expr(ctx, h0_name, f'(d_i * {b_size} + b_i) * {h_size} + h_i')};"
+        )
+        ctx.lines.append("      }")
         ctx.lines.append("    }")
         ctx.lines.append("  }")
     else:
-        ctx.lines.append(f"  for (size_t i = 0; i < {b_size * h_size}; ++i) {h_state}[i] = 0.0f;")
+        ctx.lines.append(f"  for (size_t i = 0; i < {num_dir * b_size * h_size}; ++i) {h_state}[i] = 0.0f;")
 
-    ctx.lines.append(f"  for (size_t t_i = 0; t_i < {t_size}; ++t_i) {{")
+    emit_fill_real_zero(
+        ctx,
+        indent="  ",
+        tensor_name=y_name,
+        count_expr=str(t_size * num_dir * b_size * h_size),
+    )
+    ctx.lines.append(f"  for (size_t d_i = 0; d_i < {num_dir}; ++d_i) {{")
+    if direction == "bidirectional":
+        ctx.lines.append("    int dir_rev = (d_i == 1) ? 1 : 0;")
+    elif direction == "reverse":
+        ctx.lines.append("    int dir_rev = 1;")
+    else:
+        ctx.lines.append("    int dir_rev = 0;")
     ctx.lines.append(f"    for (size_t b_i = 0; b_i < {b_size}; ++b_i) {{")
-    ctx.lines.append(f"      for (size_t h_i = 0; h_i < {h_size}; ++h_i) {{")
-    ctx.lines.append("        float sum = 0.0f;")
-    ctx.lines.append(f"        for (size_t i_i = 0; i_i < {i_size}; ++i_i) {{")
-    ctx.lines.append(f"          float xv = {x}[(t_i * {b_size} + b_i) * {i_size} + i_i];")
-    ctx.lines.append(f"          float ww = {w}[((0 * {h_size} + h_i) * {i_size}) + i_i];")
-    ctx.lines.append("          sum += xv * ww;")
+    if seq is not None:
+        ctx.lines.append(f"      int64_t seq_len = (int64_t){seq}[b_i];")
+        ctx.lines.append("      if (seq_len < 0) seq_len = 0;")
+        ctx.lines.append(f"      if (seq_len > {t_size}) seq_len = {t_size};")
+    else:
+        ctx.lines.append(f"      int64_t seq_len = {t_size};")
+    ctx.lines.append("      for (int64_t step_i = 0; step_i < seq_len; ++step_i) {")
+    ctx.lines.append("        size_t t_src = dir_rev ? (size_t)(seq_len - 1 - step_i) : (size_t)step_i;")
+    ctx.lines.append(f"        for (size_t h_i = 0; h_i < {h_size}; ++h_i) {{")
+    ctx.lines.append("          float sum = 0.0f;")
+    ctx.lines.append(f"          for (size_t i_i = 0; i_i < {i_size}; ++i_i) {{")
+    ctx.lines.append(
+        f"            float xv = {read_real_expr(ctx, x_name, f'(t_src * {b_size} + b_i) * {i_size} + i_i')};"
+    )
+    ctx.lines.append(
+        f"            float ww = {read_real_expr(ctx, w_name, f'((d_i * {h_size} + h_i) * {i_size}) + i_i')};"
+    )
+    ctx.lines.append("            sum += xv * ww;")
+    ctx.lines.append("          }")
+    ctx.lines.append(f"          for (size_t hh = 0; hh < {h_size}; ++hh) {{")
+    ctx.lines.append(f"            float hv = {h_state}[(d_i * {b_size} + b_i) * {h_size} + hh];")
+    ctx.lines.append(
+        f"            float rr = {read_real_expr(ctx, r_name, f'((d_i * {h_size} + h_i) * {h_size}) + hh')};"
+    )
+    ctx.lines.append("            sum += hv * rr;")
+    ctx.lines.append("          }")
+    if b_name is not None:
+        ctx.lines.append(
+            f"          sum += {read_real_expr(ctx, b_name, f'd_i * {2 * h_size} + h_i')};"
+        )
+        ctx.lines.append(
+            f"          sum += {read_real_expr(ctx, b_name, f'd_i * {2 * h_size} + {h_size} + h_i')};"
+        )
+    ctx.lines.append("          float pre = sum;")
+    emit_clip(ctx, indent="          ", value_var="pre", clip_var=clip_sym)
+    ctx.lines.append("          float h_val = 0.0f;")
+    emit_activation_assign(
+        ctx,
+        indent="          ",
+        out_var="h_val",
+        pre_var="pre",
+        specs_by_dir=act_specs,
+        dir_var="d_i",
+    )
+    ctx.lines.append(f"          {h_next}[h_i] = h_val;")
     ctx.lines.append("        }")
-    ctx.lines.append(f"        for (size_t hh = 0; hh < {h_size}; ++hh) {{")
-    ctx.lines.append(f"          float hv = {h_state}[b_i * {h_size} + hh];")
-    ctx.lines.append(f"          float rr = {r}[((0 * {h_size} + h_i) * {h_size}) + hh];")
-    ctx.lines.append("          sum += hv * rr;")
+    ctx.lines.append(f"        for (size_t h_i = 0; h_i < {h_size}; ++h_i) {{")
+    ctx.lines.append(
+        f"          {h_state}[(d_i * {b_size} + b_i) * {h_size} + h_i] = {h_next}[h_i];"
+    )
+    emit_store_real(
+        ctx,
+        indent="          ",
+        tensor_name=y_name,
+        idx_expr=f"((t_src * {num_dir} + d_i) * {b_size} + b_i) * {h_size} + h_i",
+        value_expr=f"{h_next}[h_i]",
+    )
     ctx.lines.append("        }")
-    if b is not None:
-        ctx.lines.append(f"        sum += {b}[0 * {2 * h_size} + h_i];")
-        ctx.lines.append(f"        sum += {b}[0 * {2 * h_size} + {h_size} + h_i];")
-    ctx.lines.append("        float hv = tanhf(sum);")
-    ctx.lines.append(f"        {h_next}[b_i * {h_size} + h_i] = hv;")
-    ctx.lines.append(f"        {y}[((t_i * 1 + 0) * {b_size} + b_i) * {h_size} + h_i] = hv;")
     ctx.lines.append("      }")
     ctx.lines.append("    }")
-    ctx.lines.append(f"    for (size_t i = 0; i < {b_size * h_size}; ++i) {h_state}[i] = {h_next}[i];")
     ctx.lines.append("  }")
 
-    if yh is not None:
-        ctx.lines.append(f"  for (size_t b_i = 0; b_i < {b_size}; ++b_i) {{")
-        ctx.lines.append(f"    for (size_t h_i = 0; h_i < {h_size}; ++h_i) {{")
-        ctx.lines.append(f"      {yh}[(0 * {b_size} + b_i) * {h_size} + h_i] = {h_state}[b_i * {h_size} + h_i];")
+    if yh_name is not None:
+        ctx.lines.append(f"  for (size_t d_i = 0; d_i < {num_dir}; ++d_i) {{")
+        ctx.lines.append(f"    for (size_t b_i = 0; b_i < {b_size}; ++b_i) {{")
+        ctx.lines.append(f"      for (size_t h_i = 0; h_i < {h_size}; ++h_i) {{")
+        emit_store_real(
+            ctx,
+            indent="        ",
+            tensor_name=yh_name,
+            idx_expr=f"(d_i * {b_size} + b_i) * {h_size} + h_i",
+            value_expr=f"{h_state}[(d_i * {b_size} + b_i) * {h_size} + h_i]",
+        )
+        ctx.lines.append("      }")
         ctx.lines.append("    }")
         ctx.lines.append("  }")

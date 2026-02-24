@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ....ir import NodeInfo
 from ....operators.context import EmitContext
-from ....operators.utils import get_const_ints, tensor_size
+from ....operators.utils import product, tensor_size
 from .registry import register_op
 
 
@@ -37,32 +37,25 @@ def emit_onehot(ctx: EmitContext, node: NodeInfo) -> None:
     idx_dtype = ctx.dtype(idx_name)
     if idx_dtype not in ("int8", "int16", "int32", "int64"):
         raise ValueError("OneHot indices dtype must be integer.")
+    depth_dtype = ctx.dtype(depth_name)
+    if depth_dtype not in ("int8", "int16", "int32", "int64"):
+        raise ValueError("OneHot depth dtype must be integer.")
 
     out_dtype = ctx.dtype(out_name)
     if out_dtype not in ("float32", "int8", "int16", "int32", "int64", "bool"):
         raise ValueError("OneHot output dtype is unsupported.")
 
-    depth_vals = get_const_ints(ctx.model, depth_name)
-    if len(depth_vals) != 1:
-        raise ValueError("OneHot depth must be scalar constant.")
-    depth = int(depth_vals[0])
-    if depth <= 0:
-        raise ValueError("OneHot depth must be positive.")
-
-    values_tensor = ctx.model.tensors.get(values_name)
-    if values_tensor is None or values_tensor.data is None:
-        raise ValueError("OneHot values must be constant tensor.")
-    if values_tensor.dtype != out_dtype:
+    if ctx.dtype(values_name) != out_dtype:
         raise ValueError("OneHot values dtype must match output dtype.")
-    if len(values_tensor.data) != 2:
+    values_shape = [int(v) for v in ctx.shape(values_name)]
+    if product(values_shape) != 2:
         raise ValueError("OneHot values must contain exactly [off, on].")
-    off_v = _scalar_literal(float(values_tensor.data[0]), out_dtype)
-    on_v = _scalar_literal(float(values_tensor.data[1]), out_dtype)
+    depth_shape = [int(v) for v in ctx.shape(depth_name)]
+    if product(depth_shape) != 1:
+        raise ValueError("OneHot depth must be scalar.")
 
     idx_shape = [int(v) for v in ctx.shape(idx_name)]
     out_shape = [int(v) for v in ctx.shape(out_name)]
-    if len(idx_shape) <= 0:
-        raise ValueError("OneHot currently supports indices rank >= 1.")
     out_rank = len(idx_shape) + 1
     axis = int(node.attrs.get("axis", -1))
     if axis < 0:
@@ -70,30 +63,36 @@ def emit_onehot(ctx: EmitContext, node: NodeInfo) -> None:
     if axis < 0 or axis >= out_rank:
         raise ValueError("OneHot axis out of range.")
 
-    expected_out = list(idx_shape)
-    expected_out.insert(axis, depth)
-    if out_shape != expected_out:
-        raise ValueError("OneHot output shape mismatch.")
+    if len(out_shape) != out_rank:
+        raise ValueError("OneHot output rank mismatch.")
 
-    idx_size = tensor_size(idx_shape)
+    idx_size = tensor_size(idx_shape) if idx_shape else 1
     out_size = tensor_size(out_shape)
-    idx_strides = _strides(idx_shape)
+    idx_strides = _strides(idx_shape) if idx_shape else []
     out_strides = _strides(out_shape)
+    expected_depth = int(out_shape[axis])
+    if expected_depth <= 0:
+        raise ValueError("OneHot output depth dimension must be positive.")
 
     idx = ctx.map_ptr(idx_name)
+    depth = ctx.map_ptr(depth_name)
+    values = ctx.map_ptr(values_name)
     out = ctx.map_ptr(out_name)
     idx_strides_sym = ctx.next_symbol("k2c_oh_idx_stride")
     out_strides_sym = ctx.next_symbol("k2c_oh_out_stride")
 
-    idx_stride_vals = ", ".join(str(v) for v in idx_strides)
+    idx_stride_vals = ", ".join(str(v) for v in idx_strides) if idx_strides else "1"
     out_stride_vals = ", ".join(str(v) for v in out_strides)
-    ctx.lines.append(f"  static const int32_t {idx_strides_sym}[{len(idx_shape)}] = {{ {idx_stride_vals} }};")
+    ctx.lines.append(f"  static const int32_t {idx_strides_sym}[{max(1, len(idx_shape))}] = {{ {idx_stride_vals} }};")
     ctx.lines.append(f"  static const int32_t {out_strides_sym}[{len(out_shape)}] = {{ {out_stride_vals} }};")
-    ctx.lines.append(f"  for (size_t i = 0; i < {out_size}; ++i) {{ {out}[i] = {off_v}; }}")
+    ctx.lines.append(f"  int64_t depth_v = (int64_t){depth}[0];")
+    ctx.lines.append("  if (depth_v <= 0) depth_v = 1;")
+    ctx.lines.append(f"  if (depth_v != {expected_depth}) depth_v = {expected_depth};")
+    ctx.lines.append(f"  for (size_t i = 0; i < {out_size}; ++i) {{ {out}[i] = {values}[0]; }}")
     ctx.lines.append(f"  for (size_t linear_i = 0; linear_i < {idx_size}; ++linear_i) {{")
-    ctx.lines.append(f"    int64_t class_v = (int64_t){idx}[linear_i];")
-    ctx.lines.append(f"    class_v = class_v % (int64_t){depth};")
-    ctx.lines.append("    if (class_v < 0) class_v += (int64_t)" + str(depth) + ";")
+    ctx.lines.append(f"    int64_t class_v = (int64_t){idx}[{ '0' if len(idx_shape) == 0 else 'linear_i' }];")
+    ctx.lines.append("    class_v = class_v % depth_v;")
+    ctx.lines.append("    if (class_v < 0) class_v += depth_v;")
     ctx.lines.append("    size_t rem = linear_i;")
     ctx.lines.append("    size_t out_linear = 0;")
     ctx.lines.append("    size_t idx_axis_i = 0;")
@@ -108,5 +107,5 @@ def emit_onehot(ctx: EmitContext, node: NodeInfo) -> None:
     ctx.lines.append("      }")
     ctx.lines.append("      out_linear += (size_t)coord * (size_t)" + out_strides_sym + "[out_axis_i];")
     ctx.lines.append("    }")
-    ctx.lines.append(f"    {out}[out_linear] = {on_v};")
+    ctx.lines.append(f"    {out}[out_linear] = {values}[1];")
     ctx.lines.append("  }")

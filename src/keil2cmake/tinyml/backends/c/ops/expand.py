@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ....ir import NodeInfo
 from ....operators.context import EmitContext
-from ....operators.utils import get_const_ints, tensor_size
+from ....operators.utils import tensor_size
 from .registry import register_op
 
 
@@ -52,11 +52,12 @@ def emit_expand(ctx: EmitContext, node: NodeInfo) -> None:
             if abs(si - so) > 1e-12 or zi != zo:
                 raise ValueError("Quantized Expand requires same input/output qparams.")
     out_shape = ctx.shape(out_name)
-    target_shape = [int(v) for v in get_const_ints(ctx.model, shape_name)]
-    if len(target_shape) != len(out_shape):
-        raise ValueError("Expand target shape rank mismatch.")
-    if any(int(a) != int(b) for a, b in zip(target_shape, out_shape)):
-        raise ValueError("Expand target shape must match inferred output shape.")
+    shape_dtype = ctx.dtype(shape_name)
+    if shape_dtype not in ("int8", "int16", "int32", "int64"):
+        raise ValueError("Expand shape dtype must be integer.")
+    shape_shape = [int(v) for v in ctx.shape(shape_name)]
+    if len(shape_shape) != 1 or int(shape_shape[0]) != len(out_shape):
+        raise ValueError("Expand shape input must be 1D and match output rank.")
 
     in_shape = ctx.shape(data_name)
     in_strides = _broadcast_strides(in_shape, out_shape)

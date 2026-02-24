@@ -1810,6 +1810,9 @@ def _propagate_qparams(tensors: dict[str, TensorInfo], nodes: list[NodeInfo]) ->
         "SpaceToDepth",
         "DepthToSpace",
         "ReverseSequence",
+        "RNN",
+        "GRU",
+        "LSTM",
     }
     for node in nodes:
         if node.op_type not in quant_ops:

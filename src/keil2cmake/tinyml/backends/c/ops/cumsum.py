@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ....ir import NodeInfo
 from ....operators.context import EmitContext
-from ....operators.utils import get_const_ints, normalize_axis, product
+from ....operators.utils import product
 from .registry import register_op
 
 
@@ -22,6 +22,9 @@ def emit_cumsum(ctx: EmitContext, node: NodeInfo) -> None:
         raise ValueError("CumSum input/output dtype must match.")
     if out_dtype not in ("float32", "int8", "int16", "int32", "int64"):
         raise ValueError("CumSum supports float32/int8/int16/int32/int64 only.")
+    axis_dtype = ctx.dtype(axis_name)
+    if axis_dtype not in ("int8", "int16", "int32", "int64"):
+        raise ValueError("CumSum axis input must be integer scalar.")
 
     in_shape = [int(v) for v in ctx.shape(x_name)]
     out_shape = [int(v) for v in ctx.shape(out_name)]
@@ -30,42 +33,56 @@ def emit_cumsum(ctx: EmitContext, node: NodeInfo) -> None:
     if len(in_shape) <= 0:
         raise ValueError("CumSum expects rank >= 1.")
 
-    axis_vals = get_const_ints(ctx.model, axis_name)
-    if len(axis_vals) != 1:
+    axis_shape = [int(v) for v in ctx.shape(axis_name)]
+    axis_size = product(axis_shape) if axis_shape else 1
+    if axis_size != 1:
         raise ValueError("CumSum axis input must be scalar.")
-    axis = normalize_axis(int(axis_vals[0]), len(in_shape))
 
     exclusive = int(node.attrs.get("exclusive", 0))
     reverse = int(node.attrs.get("reverse", 0))
     if exclusive not in (0, 1) or reverse not in (0, 1):
         raise ValueError("CumSum exclusive/reverse must be 0 or 1.")
 
-    outer = product(in_shape[:axis]) if axis > 0 else 1
-    axis_dim = int(in_shape[axis])
-    inner = product(in_shape[axis + 1 :]) if axis + 1 < len(in_shape) else 1
+    rank = len(in_shape)
+    in_strides = [1] * rank
+    acc_stride = 1
+    for i in range(rank - 1, -1, -1):
+        in_strides[i] = acc_stride
+        acc_stride *= in_shape[i]
+    total = product(in_shape)
 
     inp = ctx.map_ptr(x_name)
+    axis_ptr = ctx.map_ptr(axis_name)
     out = ctx.map_ptr(out_name)
+    in_dims_sym = ctx.next_symbol("k2c_cumsum_dims")
+    in_strides_sym = ctx.next_symbol("k2c_cumsum_strides")
+    in_dims_vals = ", ".join(str(int(v)) for v in in_shape)
+    in_strides_vals = ", ".join(str(int(v)) for v in in_strides)
+    ctx.lines.append(f"  static const int32_t {in_dims_sym}[{rank}] = {{ {in_dims_vals} }};")
+    ctx.lines.append(f"  static const int32_t {in_strides_sym}[{rank}] = {{ {in_strides_vals} }};")
+    ctx.lines.append(f"  int64_t axis_raw = (int64_t){axis_ptr}[0];")
+    ctx.lines.append(f"  if (axis_raw < 0) axis_raw += (int64_t){rank};")
+    ctx.lines.append(f"  if (axis_raw < 0 || axis_raw >= (int64_t){rank}) axis_raw = 0;")
+    ctx.lines.append("  size_t axis_u = (size_t)axis_raw;")
+    ctx.lines.append(f"  size_t axis_dim = (size_t){in_dims_sym}[axis_u];")
+    ctx.lines.append(f"  size_t axis_stride = (size_t){in_strides_sym}[axis_u];")
+    ctx.lines.append("  size_t block = axis_dim * axis_stride;")
 
-    ctx.lines.append(f"  for (size_t outer_i = 0; outer_i < {outer}; ++outer_i) {{")
-    ctx.lines.append(f"    for (size_t inner_i = 0; inner_i < {inner}; ++inner_i) {{")
+    ctx.lines.append(f"  for (size_t base = 0; base < {total}; base += block) {{")
+    ctx.lines.append("    for (size_t off = 0; off < axis_stride; ++off) {")
     if out_dtype == "float32":
         ctx.lines.append("      float acc = 0.0f;")
     else:
         ctx.lines.append("      int64_t acc = 0;")
-    ctx.lines.append(f"      for (size_t axis_i = 0; axis_i < {axis_dim}; ++axis_i) {{")
+    ctx.lines.append("      for (size_t axis_i = 0; axis_i < axis_dim; ++axis_i) {")
     if reverse == 1:
-        ctx.lines.append(f"        size_t src_axis = (size_t){axis_dim} - 1 - axis_i;")
+        ctx.lines.append("        size_t src_axis = axis_dim - 1 - axis_i;")
         ctx.lines.append("        size_t dst_axis = src_axis;")
     else:
         ctx.lines.append("        size_t src_axis = axis_i;")
         ctx.lines.append("        size_t dst_axis = axis_i;")
-    ctx.lines.append(
-        f"        size_t src_idx = ((outer_i * (size_t){axis_dim} + src_axis) * (size_t){inner}) + inner_i;"
-    )
-    ctx.lines.append(
-        f"        size_t dst_idx = ((outer_i * (size_t){axis_dim} + dst_axis) * (size_t){inner}) + inner_i;"
-    )
+    ctx.lines.append("        size_t src_idx = base + src_axis * axis_stride + off;")
+    ctx.lines.append("        size_t dst_idx = base + dst_axis * axis_stride + off;")
     if exclusive == 1:
         if out_dtype == "float32":
             ctx.lines.append(f"        {out}[dst_idx] = acc;")

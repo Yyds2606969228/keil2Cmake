@@ -55,12 +55,15 @@ def emit_conv_transpose(ctx: EmitContext, node: NodeInfo) -> None:
     if n != n_out:
         raise ValueError("ConvTranspose batch mismatch.")
     group = int(node.attrs.get("group", 1))
-    if group != 1:
-        raise ValueError("ConvTranspose currently supports group=1 only.")
+    if group <= 0:
+        raise ValueError("ConvTranspose group must be positive.")
+    if c_in % group != 0:
+        raise ValueError("ConvTranspose input channels must be divisible by group.")
     if wc_in != c_in:
         raise ValueError("ConvTranspose weight/input channel mismatch.")
-    if c_out != c_out_per_group:
+    if c_out != c_out_per_group * group:
         raise ValueError("ConvTranspose output channel mismatch.")
+    ic_per_group = c_in // group
 
     strides = [int(v) for v in node.attrs.get("strides", [1, 1])]
     dilations = [int(v) for v in node.attrs.get("dilations", [1, 1])]
@@ -117,6 +120,8 @@ def emit_conv_transpose(ctx: EmitContext, node: NodeInfo) -> None:
 
         ctx.lines.append(f"  for (size_t ni = 0; ni < {n}; ++ni) {{")
         ctx.lines.append(f"    for (size_t ic = 0; ic < {c_in}; ++ic) {{")
+        ctx.lines.append(f"      size_t g = ic / {ic_per_group};")
+        ctx.lines.append(f"      size_t oc_base = g * {c_out_per_group};")
         ctx.lines.append(f"      for (size_t ih = 0; ih < {h}; ++ih) {{")
         ctx.lines.append(f"        for (size_t iw = 0; iw < {w_in}; ++iw) {{")
         ctx.lines.append(
@@ -127,9 +132,10 @@ def emit_conv_transpose(ctx: EmitContext, node: NodeInfo) -> None:
         ctx.lines.append(f"              int oh = (int)(ih * {stride_h} + kh * {dil_h}) - {pad_h0};")
         ctx.lines.append(f"              int ow = (int)(iw * {stride_w} + kw * {dil_w}) - {pad_w0};")
         ctx.lines.append(f"              if (oh < 0 || ow < 0 || oh >= (int){out_h} || ow >= (int){out_w}) continue;")
-        ctx.lines.append(f"              for (size_t oc = 0; oc < {c_out}; ++oc) {{")
+        ctx.lines.append(f"              for (size_t oc_local = 0; oc_local < {c_out_per_group}; ++oc_local) {{")
+        ctx.lines.append(f"                size_t oc = oc_base + oc_local;")
         ctx.lines.append(
-            f"                size_t w_idx = ((ic * {c_out} + oc) * {k_h} + kh) * {k_w} + kw;"
+            f"                size_t w_idx = ((ic * {c_out_per_group} + oc_local) * {k_h} + kh) * {k_w} + kw;"
         )
         ctx.lines.append(
             f"                float wv = ((float){w}[w_idx] - {zw}) * {sw:.8f}f;"
@@ -169,6 +175,8 @@ def emit_conv_transpose(ctx: EmitContext, node: NodeInfo) -> None:
 
     ctx.lines.append(f"  for (size_t ni = 0; ni < {n}; ++ni) {{")
     ctx.lines.append(f"    for (size_t ic = 0; ic < {c_in}; ++ic) {{")
+    ctx.lines.append(f"      size_t g = ic / {ic_per_group};")
+    ctx.lines.append(f"      size_t oc_base = g * {c_out_per_group};")
     ctx.lines.append(f"      for (size_t ih = 0; ih < {h}; ++ih) {{")
     ctx.lines.append(f"        for (size_t iw = 0; iw < {w_in}; ++iw) {{")
     ctx.lines.append(f"          float v = {x}[((ni * {c_in} + ic) * {h} + ih) * {w_in} + iw];")
@@ -181,9 +189,10 @@ def emit_conv_transpose(ctx: EmitContext, node: NodeInfo) -> None:
         f"              int ow = (int)(iw * {stride_w} + kw * {dil_w}) - {pad_w0};"
     )
     ctx.lines.append(f"              if (oh < 0 || ow < 0 || oh >= (int){out_h} || ow >= (int){out_w}) continue;")
-    ctx.lines.append(f"              for (size_t oc = 0; oc < {c_out}; ++oc) {{")
+    ctx.lines.append(f"              for (size_t oc_local = 0; oc_local < {c_out_per_group}; ++oc_local) {{")
+    ctx.lines.append("                size_t oc = oc_base + oc_local;")
     ctx.lines.append(
-        f"                size_t w_idx = ((ic * {c_out} + oc) * {k_h} + kh) * {k_w} + kw;"
+        f"                size_t w_idx = ((ic * {c_out_per_group} + oc_local) * {k_h} + kh) * {k_w} + kw;"
     )
     ctx.lines.append(
         f"                size_t out_idx = ((ni * {c_out} + oc) * {out_h} + (size_t)oh) * {out_w} + (size_t)ow;"

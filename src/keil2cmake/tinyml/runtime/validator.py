@@ -110,6 +110,574 @@ def _attr_scalar(value: Any, default: float = 0.0) -> float:
     return float(arr.reshape(-1)[0])
 
 
+def _decode_attr_str(value: Any, default: str) -> str:
+    if value is None:
+        return default
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="ignore").lower()
+    return str(value).lower()
+
+
+def _direction_and_count(op_name: str, direction_attr: Any) -> tuple[str, int]:
+    direction = _decode_attr_str(direction_attr, "forward")
+    if direction == "bidirectional":
+        return direction, 2
+    if direction in ("forward", "reverse"):
+        return direction, 1
+    raise ValueError(f"{op_name} direction must be forward/reverse/bidirectional.")
+
+
+def _activation_list(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    out: list[str] = []
+    for item in raw:
+        if isinstance(item, bytes):
+            out.append(item.decode("utf-8", errors="ignore").lower())
+        else:
+            out.append(str(item).lower())
+    return out
+
+
+def _float_list(raw: Any) -> list[float]:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        return [float(v) for v in raw]
+    return [float(raw)]
+
+
+_SUPPORTED_REC_ACTS = {
+    "relu",
+    "tanh",
+    "sigmoid",
+    "affine",
+    "leakyrelu",
+    "thresholdedrelu",
+    "scaledtanh",
+    "hardsigmoid",
+    "elu",
+    "softsign",
+    "softplus",
+}
+
+
+def _rec_default_alpha(act: str) -> float:
+    if act == "leakyrelu":
+        return 0.01
+    if act == "thresholdedrelu":
+        return 1.0
+    if act == "scaledtanh":
+        return 1.0
+    if act == "hardsigmoid":
+        return 0.2
+    if act == "elu":
+        return 1.0
+    if act == "affine":
+        return 1.0
+    return 0.0
+
+
+def _rec_default_beta(act: str) -> float:
+    if act == "scaledtanh":
+        return 1.0
+    if act == "hardsigmoid":
+        return 0.5
+    if act == "affine":
+        return 0.0
+    return 0.0
+
+
+def _rec_activation_specs(
+    op_name: str,
+    node,
+    *,
+    expected_count: int,
+    default_cycle: list[str],
+) -> list[tuple[str, float, float]]:
+    acts = _activation_list(node.attrs.get("activations", None))
+    if not acts:
+        reps = expected_count // len(default_cycle)
+        if reps * len(default_cycle) != expected_count:
+            raise ValueError(f"{op_name} invalid default activation cycle.")
+        acts = default_cycle * reps
+    if len(acts) != expected_count:
+        raise ValueError(f"{op_name} activations count mismatch.")
+    for act in acts:
+        if act not in _SUPPORTED_REC_ACTS:
+            raise ValueError(f"{op_name} activation '{act}' is unsupported.")
+    alphas = _float_list(node.attrs.get("activation_alpha", None))
+    betas = _float_list(node.attrs.get("activation_beta", None))
+    specs: list[tuple[str, float, float]] = []
+    for idx, act in enumerate(acts):
+        alpha = alphas[idx] if idx < len(alphas) else _rec_default_alpha(act)
+        beta = betas[idx] if idx < len(betas) else _rec_default_beta(act)
+        specs.append((act, float(alpha), float(beta)))
+    return specs
+
+
+def _rec_apply_activation(x: np.ndarray, spec: tuple[str, float, float]) -> np.ndarray:
+    act, alpha, beta = spec
+    if act == "relu":
+        return np.maximum(x, 0.0).astype(np.float32)
+    if act == "tanh":
+        return np.tanh(x).astype(np.float32)
+    if act == "sigmoid":
+        return (1.0 / (1.0 + np.exp(-x))).astype(np.float32)
+    if act == "affine":
+        return (alpha * x + beta).astype(np.float32)
+    if act == "leakyrelu":
+        return np.where(x >= 0.0, x, alpha * x).astype(np.float32)
+    if act == "thresholdedrelu":
+        return np.where(x > alpha, x, 0.0).astype(np.float32)
+    if act == "scaledtanh":
+        return (alpha * np.tanh(beta * x)).astype(np.float32)
+    if act == "hardsigmoid":
+        return np.clip(alpha * x + beta, 0.0, 1.0).astype(np.float32)
+    if act == "elu":
+        return np.where(x >= 0.0, x, alpha * (np.exp(x) - 1.0)).astype(np.float32)
+    if act == "softsign":
+        return (x / (1.0 + np.abs(x))).astype(np.float32)
+    if act == "softplus":
+        return np.log1p(np.exp(x)).astype(np.float32)
+    raise ValueError(f"Unsupported recurrent activation '{act}'.")
+
+
+def _rec_apply_clip(x: np.ndarray, clip: float | None) -> np.ndarray:
+    if clip is None:
+        return x
+    return np.clip(x, -clip, clip).astype(np.float32)
+
+
+def _resolve_sequence_lens(
+    seq_data: np.ndarray | None,
+    batch_size: int,
+    t_size: int,
+    op_name: str,
+) -> np.ndarray:
+    if seq_data is None:
+        return np.full((batch_size,), t_size, dtype=np.int64)
+    seq = seq_data.astype(np.int64, copy=False).reshape(-1)
+    if seq.size != batch_size:
+        raise ValueError(f"{op_name} sequence_lens size mismatch.")
+    seq = np.clip(seq, 0, t_size).astype(np.int64, copy=False)
+    return seq
+
+
+def _rec_tensor_to_real(
+    model: ModelIR,
+    tensors: dict[str, np.ndarray],
+    name: str,
+    *,
+    op_name: str,
+    role: str,
+) -> np.ndarray:
+    dtype = _tensor_dtype(model.tensors[name])
+    if dtype == "float32":
+        return tensors[name].astype(np.float32, copy=False)
+    if dtype in ("int8", "int16"):
+        scale, zero = _qparams(model, name)
+        return _dequantize_int(tensors[name], scale, zero).astype(np.float32, copy=False)
+    raise ValueError(f"{op_name} {role} dtype must be float32/int8/int16.")
+
+
+def _rec_real_to_tensor(
+    model: ModelIR,
+    name: str,
+    data: np.ndarray,
+    *,
+    op_name: str,
+    role: str,
+) -> np.ndarray:
+    dtype = _tensor_dtype(model.tensors[name])
+    out = data.astype(np.float32, copy=False)
+    if dtype == "float32":
+        return out
+    if dtype in ("int8", "int16"):
+        scale, zero = _qparams(model, name)
+        return _quantize_float(out, scale, zero, dtype)
+    raise ValueError(f"{op_name} {role} dtype must be float32/int8/int16.")
+
+
+def _eval_rnn_node(model: ModelIR, node, tensors: dict[str, np.ndarray]) -> None:
+    if len(node.inputs) < 3:
+        raise ValueError("RNN expects at least 3 inputs: X, W, R.")
+    if len(node.outputs) < 1 or len(node.outputs) > 2:
+        raise ValueError("RNN expects 1 or 2 outputs: Y, [Y_h].")
+
+    x_name = node.inputs[0]
+    w_name = node.inputs[1]
+    r_name = node.inputs[2]
+    b_name = node.inputs[3] if len(node.inputs) >= 4 and node.inputs[3] else None
+    seq_name = node.inputs[4] if len(node.inputs) >= 5 and node.inputs[4] else None
+    h0_name = node.inputs[5] if len(node.inputs) >= 6 and node.inputs[5] else None
+    y_name = node.outputs[0]
+    yh_name = node.outputs[1] if len(node.outputs) >= 2 and node.outputs[1] else None
+
+    for name, role in ((x_name, "X"), (w_name, "W"), (r_name, "R"), (y_name, "Y")):
+        if _tensor_dtype(model.tensors[name]) not in ("float32", "int8", "int16"):
+            raise ValueError(f"RNN {role} dtype must be float32/int8/int16.")
+    if b_name is not None and _tensor_dtype(model.tensors[b_name]) not in ("float32", "int8", "int16"):
+        raise ValueError("RNN B dtype must be float32/int8/int16.")
+    if h0_name is not None and _tensor_dtype(model.tensors[h0_name]) not in ("float32", "int8", "int16"):
+        raise ValueError("RNN initial_h dtype must be float32/int8/int16.")
+    if yh_name is not None and _tensor_dtype(model.tensors[yh_name]) not in ("float32", "int8", "int16"):
+        raise ValueError("RNN Y_h dtype must be float32/int8/int16.")
+    if seq_name is not None and _tensor_dtype(model.tensors[seq_name]) not in ("int32", "int64"):
+        raise ValueError("RNN sequence_lens dtype must be int64/int32.")
+
+    x = _rec_tensor_to_real(model, tensors, x_name, op_name="RNN", role="X")
+    w = _rec_tensor_to_real(model, tensors, w_name, op_name="RNN", role="W")
+    r = _rec_tensor_to_real(model, tensors, r_name, op_name="RNN", role="R")
+    b_arr = _rec_tensor_to_real(model, tensors, b_name, op_name="RNN", role="B") if b_name is not None else None
+    seq_arr = tensors[seq_name] if seq_name is not None else None
+    h0 = _rec_tensor_to_real(model, tensors, h0_name, op_name="RNN", role="initial_h") if h0_name is not None else None
+
+    direction, expect_dirs = _direction_and_count("RNN", node.attrs.get("direction", "forward"))
+    if x.ndim != 3 or w.ndim != 3 or r.ndim != 3:
+        raise ValueError("RNN expects X/W/R rank=3.")
+    t_size, b_size, i_size = (int(v) for v in x.shape)
+    num_dir, h_size, i_w = (int(v) for v in w.shape)
+    num_dir_r, h_r0, h_r1 = (int(v) for v in r.shape)
+    if num_dir != expect_dirs or num_dir_r != expect_dirs:
+        raise ValueError("RNN num_directions does not match direction attribute.")
+    if i_w != i_size or h_r0 != h_size or h_r1 != h_size:
+        raise ValueError("RNN W/R shape mismatch.")
+    if b_arr is not None and tuple(int(v) for v in b_arr.shape) != (num_dir, 2 * h_size):
+        raise ValueError("RNN bias shape mismatch.")
+    if h0 is not None and tuple(int(v) for v in h0.shape) != (num_dir, b_size, h_size):
+        raise ValueError("RNN initial_h shape mismatch.")
+
+    act_specs = _rec_activation_specs(
+        "RNN",
+        node,
+        expected_count=num_dir,
+        default_cycle=["tanh"],
+    )
+    clip_attr = node.attrs.get("clip", None)
+    clip_val = None if clip_attr is None else float(clip_attr)
+    if clip_val is not None and clip_val < 0.0:
+        raise ValueError("RNN clip must be non-negative.")
+
+    seq_lens = _resolve_sequence_lens(seq_arr, b_size, t_size, "RNN")
+    y = np.zeros((t_size, num_dir, b_size, h_size), dtype=np.float32)
+    h_state = np.zeros((num_dir, b_size, h_size), dtype=np.float32)
+    if h0 is not None:
+        h_state[...] = h0
+    for d_i in range(num_dir):
+        dir_rev = (direction == "reverse") or (direction == "bidirectional" and d_i == 1)
+        for b_i in range(b_size):
+            seq_len = int(seq_lens[b_i])
+            for step_i in range(seq_len):
+                t_src = (seq_len - 1 - step_i) if dir_rev else step_i
+                h_prev = h_state[d_i, b_i, :]
+                pre = np.matmul(w[d_i, :, :], x[t_src, b_i, :]) + np.matmul(r[d_i, :, :], h_prev)
+                if b_arr is not None:
+                    pre = pre + b_arr[d_i, :h_size] + b_arr[d_i, h_size:]
+                pre = _rec_apply_clip(pre.astype(np.float32, copy=False), clip_val)
+                h_new = _rec_apply_activation(pre, act_specs[d_i]).astype(np.float32, copy=False)
+                h_state[d_i, b_i, :] = h_new
+                y[t_src, d_i, b_i, :] = h_new
+
+    tensors[y_name] = _rec_real_to_tensor(model, y_name, y, op_name="RNN", role="Y")
+    if yh_name is not None:
+        tensors[yh_name] = _rec_real_to_tensor(
+            model,
+            yh_name,
+            h_state.astype(np.float32, copy=False),
+            op_name="RNN",
+            role="Y_h",
+        )
+
+
+def _eval_gru_node(model: ModelIR, node, tensors: dict[str, np.ndarray]) -> None:
+    if len(node.inputs) < 3:
+        raise ValueError("GRU expects at least 3 inputs: X, W, R.")
+    if len(node.outputs) < 1 or len(node.outputs) > 2:
+        raise ValueError("GRU expects 1 or 2 outputs: Y, [Y_h].")
+
+    x_name = node.inputs[0]
+    w_name = node.inputs[1]
+    r_name = node.inputs[2]
+    b_name = node.inputs[3] if len(node.inputs) >= 4 and node.inputs[3] else None
+    seq_name = node.inputs[4] if len(node.inputs) >= 5 and node.inputs[4] else None
+    h0_name = node.inputs[5] if len(node.inputs) >= 6 and node.inputs[5] else None
+    y_name = node.outputs[0]
+    yh_name = node.outputs[1] if len(node.outputs) >= 2 and node.outputs[1] else None
+
+    for name, role in ((x_name, "X"), (w_name, "W"), (r_name, "R"), (y_name, "Y")):
+        if _tensor_dtype(model.tensors[name]) not in ("float32", "int8", "int16"):
+            raise ValueError(f"GRU {role} dtype must be float32/int8/int16.")
+    if b_name is not None and _tensor_dtype(model.tensors[b_name]) not in ("float32", "int8", "int16"):
+        raise ValueError("GRU B dtype must be float32/int8/int16.")
+    if h0_name is not None and _tensor_dtype(model.tensors[h0_name]) not in ("float32", "int8", "int16"):
+        raise ValueError("GRU initial_h dtype must be float32/int8/int16.")
+    if yh_name is not None and _tensor_dtype(model.tensors[yh_name]) not in ("float32", "int8", "int16"):
+        raise ValueError("GRU Y_h dtype must be float32/int8/int16.")
+    if seq_name is not None and _tensor_dtype(model.tensors[seq_name]) not in ("int32", "int64"):
+        raise ValueError("GRU sequence_lens dtype must be int64/int32.")
+
+    x = _rec_tensor_to_real(model, tensors, x_name, op_name="GRU", role="X")
+    w = _rec_tensor_to_real(model, tensors, w_name, op_name="GRU", role="W")
+    r = _rec_tensor_to_real(model, tensors, r_name, op_name="GRU", role="R")
+    b_arr = _rec_tensor_to_real(model, tensors, b_name, op_name="GRU", role="B") if b_name is not None else None
+    seq_arr = tensors[seq_name] if seq_name is not None else None
+    h0 = _rec_tensor_to_real(model, tensors, h0_name, op_name="GRU", role="initial_h") if h0_name is not None else None
+
+    direction, expect_dirs = _direction_and_count("GRU", node.attrs.get("direction", "forward"))
+    linear_before_reset = int(node.attrs.get("linear_before_reset", 0))
+    if linear_before_reset not in (0, 1):
+        raise ValueError("GRU linear_before_reset must be 0 or 1.")
+    if x.ndim != 3 or w.ndim != 3 or r.ndim != 3:
+        raise ValueError("GRU expects X/W/R rank=3.")
+    t_size, b_size, i_size = (int(v) for v in x.shape)
+    num_dir, wh, i_w = (int(v) for v in w.shape)
+    num_dir_r, rh0, rh1 = (int(v) for v in r.shape)
+    if num_dir != expect_dirs or num_dir_r != expect_dirs:
+        raise ValueError("GRU num_directions does not match direction attribute.")
+    if wh % 3 != 0 or rh0 % 3 != 0:
+        raise ValueError("GRU W/R gate dimension must be 3*hidden_size.")
+    h_size = wh // 3
+    if i_w != i_size or rh0 != 3 * h_size or rh1 != h_size:
+        raise ValueError("GRU W/R shape mismatch.")
+    if b_arr is not None and tuple(int(v) for v in b_arr.shape) != (num_dir, 6 * h_size):
+        raise ValueError("GRU bias shape mismatch.")
+    if h0 is not None and tuple(int(v) for v in h0.shape) != (num_dir, b_size, h_size):
+        raise ValueError("GRU initial_h shape mismatch.")
+
+    act_specs = _rec_activation_specs(
+        "GRU",
+        node,
+        expected_count=2 * num_dir,
+        default_cycle=["sigmoid", "tanh"],
+    )
+    f_specs = [act_specs[2 * d] for d in range(num_dir)]
+    g_specs = [act_specs[2 * d + 1] for d in range(num_dir)]
+    clip_attr = node.attrs.get("clip", None)
+    clip_val = None if clip_attr is None else float(clip_attr)
+    if clip_val is not None and clip_val < 0.0:
+        raise ValueError("GRU clip must be non-negative.")
+
+    seq_lens = _resolve_sequence_lens(seq_arr, b_size, t_size, "GRU")
+    y = np.zeros((t_size, num_dir, b_size, h_size), dtype=np.float32)
+    h_state = np.zeros((num_dir, b_size, h_size), dtype=np.float32)
+    if h0 is not None:
+        h_state[...] = h0
+
+    for d_i in range(num_dir):
+        dir_rev = (direction == "reverse") or (direction == "bidirectional" and d_i == 1)
+        wb = rb = None
+        if b_arr is not None:
+            wb = b_arr[d_i, : 3 * h_size]
+            rb = b_arr[d_i, 3 * h_size :]
+        for b_i in range(b_size):
+            seq_len = int(seq_lens[b_i])
+            for step_i in range(seq_len):
+                t_src = (seq_len - 1 - step_i) if dir_rev else step_i
+                h_prev = h_state[d_i, b_i, :]
+                x_proj = np.matmul(w[d_i, :, :], x[t_src, b_i, :])
+                h_proj = np.matmul(r[d_i, :, :], h_prev)
+                x_z, x_r, x_h = np.split(x_proj, 3)
+                h_z, h_r, _ = np.split(h_proj, 3)
+                if wb is not None and rb is not None:
+                    wb_z, wb_r, wb_h = np.split(wb, 3)
+                    rb_z, rb_r, rb_h = np.split(rb, 3)
+                else:
+                    wb_z = wb_r = wb_h = rb_z = rb_r = rb_h = 0.0
+                z_pre = x_z + h_z + wb_z + rb_z
+                r_pre = x_r + h_r + wb_r + rb_r
+                z_pre = _rec_apply_clip(z_pre.astype(np.float32, copy=False), clip_val)
+                r_pre = _rec_apply_clip(r_pre.astype(np.float32, copy=False), clip_val)
+                z = _rec_apply_activation(z_pre, f_specs[d_i]).astype(np.float32, copy=False)
+                rr = _rec_apply_activation(r_pre, f_specs[d_i]).astype(np.float32, copy=False)
+                rec_h_mat = r[d_i, 2 * h_size : 3 * h_size, :]
+                if linear_before_reset == 0:
+                    h_pre = x_h + np.matmul(rec_h_mat, rr * h_prev) + wb_h + rb_h
+                else:
+                    h_pre = x_h + rr * (np.matmul(rec_h_mat, h_prev) + rb_h) + wb_h
+                h_pre = _rec_apply_clip(h_pre.astype(np.float32, copy=False), clip_val)
+                h_tilde = _rec_apply_activation(h_pre, g_specs[d_i]).astype(np.float32, copy=False)
+                h_new = (1.0 - z) * h_tilde + z * h_prev
+                h_state[d_i, b_i, :] = h_new.astype(np.float32, copy=False)
+                y[t_src, d_i, b_i, :] = h_state[d_i, b_i, :]
+
+    tensors[y_name] = _rec_real_to_tensor(model, y_name, y, op_name="GRU", role="Y")
+    if yh_name is not None:
+        tensors[yh_name] = _rec_real_to_tensor(
+            model,
+            yh_name,
+            h_state.astype(np.float32, copy=False),
+            op_name="GRU",
+            role="Y_h",
+        )
+
+
+def _eval_lstm_node(model: ModelIR, node, tensors: dict[str, np.ndarray]) -> None:
+    if len(node.inputs) < 3:
+        raise ValueError("LSTM expects at least 3 inputs: X, W, R.")
+    if len(node.outputs) < 1 or len(node.outputs) > 3:
+        raise ValueError("LSTM expects 1..3 outputs: Y, [Y_h], [Y_c].")
+
+    x_name = node.inputs[0]
+    w_name = node.inputs[1]
+    r_name = node.inputs[2]
+    b_name = node.inputs[3] if len(node.inputs) >= 4 and node.inputs[3] else None
+    seq_name = node.inputs[4] if len(node.inputs) >= 5 and node.inputs[4] else None
+    h0_name = node.inputs[5] if len(node.inputs) >= 6 and node.inputs[5] else None
+    c0_name = node.inputs[6] if len(node.inputs) >= 7 and node.inputs[6] else None
+    p_name = node.inputs[7] if len(node.inputs) >= 8 and node.inputs[7] else None
+    y_name = node.outputs[0]
+    yh_name = node.outputs[1] if len(node.outputs) >= 2 and node.outputs[1] else None
+    yc_name = node.outputs[2] if len(node.outputs) >= 3 and node.outputs[2] else None
+
+    for name, role in ((x_name, "X"), (w_name, "W"), (r_name, "R"), (y_name, "Y")):
+        if _tensor_dtype(model.tensors[name]) not in ("float32", "int8", "int16"):
+            raise ValueError(f"LSTM {role} dtype must be float32/int8/int16.")
+    if b_name is not None and _tensor_dtype(model.tensors[b_name]) not in ("float32", "int8", "int16"):
+        raise ValueError("LSTM B dtype must be float32/int8/int16.")
+    if h0_name is not None and _tensor_dtype(model.tensors[h0_name]) not in ("float32", "int8", "int16"):
+        raise ValueError("LSTM initial_h dtype must be float32/int8/int16.")
+    if c0_name is not None and _tensor_dtype(model.tensors[c0_name]) not in ("float32", "int8", "int16"):
+        raise ValueError("LSTM initial_c dtype must be float32/int8/int16.")
+    if yh_name is not None and _tensor_dtype(model.tensors[yh_name]) not in ("float32", "int8", "int16"):
+        raise ValueError("LSTM Y_h dtype must be float32/int8/int16.")
+    if yc_name is not None and _tensor_dtype(model.tensors[yc_name]) not in ("float32", "int8", "int16"):
+        raise ValueError("LSTM Y_c dtype must be float32/int8/int16.")
+    if seq_name is not None and _tensor_dtype(model.tensors[seq_name]) not in ("int32", "int64"):
+        raise ValueError("LSTM sequence_lens dtype must be int64/int32.")
+    if p_name is not None and _tensor_dtype(model.tensors[p_name]) not in ("float32", "int8", "int16"):
+        raise ValueError("LSTM peephole dtype must be float32/int8/int16.")
+
+    x = _rec_tensor_to_real(model, tensors, x_name, op_name="LSTM", role="X")
+    w = _rec_tensor_to_real(model, tensors, w_name, op_name="LSTM", role="W")
+    r = _rec_tensor_to_real(model, tensors, r_name, op_name="LSTM", role="R")
+    b_arr = _rec_tensor_to_real(model, tensors, b_name, op_name="LSTM", role="B") if b_name is not None else None
+    seq_arr = tensors[seq_name] if seq_name is not None else None
+    h0 = _rec_tensor_to_real(model, tensors, h0_name, op_name="LSTM", role="initial_h") if h0_name is not None else None
+    c0 = _rec_tensor_to_real(model, tensors, c0_name, op_name="LSTM", role="initial_c") if c0_name is not None else None
+    p_arr = _rec_tensor_to_real(model, tensors, p_name, op_name="LSTM", role="P") if p_name is not None else None
+
+    direction, expect_dirs = _direction_and_count("LSTM", node.attrs.get("direction", "forward"))
+    input_forget = int(node.attrs.get("input_forget", 0))
+    if input_forget not in (0, 1):
+        raise ValueError("LSTM input_forget must be 0 or 1.")
+    if x.ndim != 3 or w.ndim != 3 or r.ndim != 3:
+        raise ValueError("LSTM expects X/W/R rank=3.")
+    t_size, b_size, i_size = (int(v) for v in x.shape)
+    num_dir, wh, i_w = (int(v) for v in w.shape)
+    num_dir_r, rh0, rh1 = (int(v) for v in r.shape)
+    if num_dir != expect_dirs or num_dir_r != expect_dirs:
+        raise ValueError("LSTM num_directions does not match direction attribute.")
+    if wh % 4 != 0 or rh0 % 4 != 0:
+        raise ValueError("LSTM W/R gate dimension must be 4*hidden_size.")
+    h_size = wh // 4
+    if i_w != i_size or rh0 != 4 * h_size or rh1 != h_size:
+        raise ValueError("LSTM W/R shape mismatch.")
+    if b_arr is not None and tuple(int(v) for v in b_arr.shape) != (num_dir, 8 * h_size):
+        raise ValueError("LSTM bias shape mismatch.")
+    if h0 is not None and tuple(int(v) for v in h0.shape) != (num_dir, b_size, h_size):
+        raise ValueError("LSTM initial_h shape mismatch.")
+    if c0 is not None and tuple(int(v) for v in c0.shape) != (num_dir, b_size, h_size):
+        raise ValueError("LSTM initial_c shape mismatch.")
+    if p_arr is not None and tuple(int(v) for v in p_arr.shape) != (num_dir, 3 * h_size):
+        raise ValueError("LSTM peephole shape mismatch.")
+
+    act_specs = _rec_activation_specs(
+        "LSTM",
+        node,
+        expected_count=3 * num_dir,
+        default_cycle=["sigmoid", "tanh", "tanh"],
+    )
+    f_specs = [act_specs[3 * d] for d in range(num_dir)]
+    g_specs = [act_specs[3 * d + 1] for d in range(num_dir)]
+    h_specs = [act_specs[3 * d + 2] for d in range(num_dir)]
+    clip_attr = node.attrs.get("clip", None)
+    clip_val = None if clip_attr is None else float(clip_attr)
+    if clip_val is not None and clip_val < 0.0:
+        raise ValueError("LSTM clip must be non-negative.")
+
+    seq_lens = _resolve_sequence_lens(seq_arr, b_size, t_size, "LSTM")
+    y = np.zeros((t_size, num_dir, b_size, h_size), dtype=np.float32)
+    h_state = np.zeros((num_dir, b_size, h_size), dtype=np.float32)
+    c_state = np.zeros((num_dir, b_size, h_size), dtype=np.float32)
+    if h0 is not None:
+        h_state[...] = h0
+    if c0 is not None:
+        c_state[...] = c0
+
+    for d_i in range(num_dir):
+        dir_rev = (direction == "reverse") or (direction == "bidirectional" and d_i == 1)
+        wb = rb = None
+        if b_arr is not None:
+            wb = b_arr[d_i, : 4 * h_size]
+            rb = b_arr[d_i, 4 * h_size :]
+        p_i = p_o = p_f = None
+        if p_arr is not None:
+            p_i = p_arr[d_i, :h_size]
+            p_o = p_arr[d_i, h_size : 2 * h_size]
+            p_f = p_arr[d_i, 2 * h_size :]
+        for b_i in range(b_size):
+            seq_len = int(seq_lens[b_i])
+            for step_i in range(seq_len):
+                t_src = (seq_len - 1 - step_i) if dir_rev else step_i
+                h_prev = h_state[d_i, b_i, :]
+                c_prev = c_state[d_i, b_i, :]
+                x_proj = np.matmul(w[d_i, :, :], x[t_src, b_i, :])
+                h_proj = np.matmul(r[d_i, :, :], h_prev)
+                x_i, x_o, x_f, x_g = np.split(x_proj, 4)
+                h_i, h_o, h_f, h_g = np.split(h_proj, 4)
+                if wb is not None and rb is not None:
+                    wb_i, wb_o, wb_f, wb_g = np.split(wb, 4)
+                    rb_i, rb_o, rb_f, rb_g = np.split(rb, 4)
+                else:
+                    wb_i = wb_o = wb_f = wb_g = rb_i = rb_o = rb_f = rb_g = 0.0
+
+                pre_i = x_i + h_i + wb_i + rb_i
+                pre_o = x_o + h_o + wb_o + rb_o
+                pre_f = x_f + h_f + wb_f + rb_f
+                pre_g = x_g + h_g + wb_g + rb_g
+                if p_i is not None and p_f is not None:
+                    pre_i = pre_i + p_i * c_prev
+                    pre_f = pre_f + p_f * c_prev
+                pre_i = _rec_apply_clip(pre_i.astype(np.float32, copy=False), clip_val)
+                pre_f = _rec_apply_clip(pre_f.astype(np.float32, copy=False), clip_val)
+                pre_g = _rec_apply_clip(pre_g.astype(np.float32, copy=False), clip_val)
+                i_gate = _rec_apply_activation(pre_i, f_specs[d_i]).astype(np.float32, copy=False)
+                if input_forget == 1:
+                    f_gate = (1.0 - i_gate).astype(np.float32, copy=False)
+                else:
+                    f_gate = _rec_apply_activation(pre_f, f_specs[d_i]).astype(np.float32, copy=False)
+                g_gate = _rec_apply_activation(pre_g, g_specs[d_i]).astype(np.float32, copy=False)
+                c_new = f_gate * c_prev + i_gate * g_gate
+                if p_o is not None:
+                    pre_o = pre_o + p_o * c_new
+                pre_o = _rec_apply_clip(pre_o.astype(np.float32, copy=False), clip_val)
+                o_gate = _rec_apply_activation(pre_o, f_specs[d_i]).astype(np.float32, copy=False)
+                c_act = _rec_apply_clip(c_new.astype(np.float32, copy=False), clip_val)
+                h_new = o_gate * _rec_apply_activation(c_act, h_specs[d_i]).astype(np.float32, copy=False)
+                h_state[d_i, b_i, :] = h_new.astype(np.float32, copy=False)
+                c_state[d_i, b_i, :] = c_new.astype(np.float32, copy=False)
+                y[t_src, d_i, b_i, :] = h_state[d_i, b_i, :]
+
+    tensors[y_name] = _rec_real_to_tensor(model, y_name, y, op_name="LSTM", role="Y")
+    if yh_name is not None:
+        tensors[yh_name] = _rec_real_to_tensor(
+            model,
+            yh_name,
+            h_state.astype(np.float32, copy=False),
+            op_name="LSTM",
+            role="Y_h",
+        )
+    if yc_name is not None:
+        tensors[yc_name] = _rec_real_to_tensor(
+            model,
+            yc_name,
+            c_state.astype(np.float32, copy=False),
+            op_name="LSTM",
+            role="Y_c",
+        )
+
+
 def _const_from_constant_attrs(attrs: dict[str, Any]) -> np.ndarray:
     if "value" in attrs:
         arr = numpy_helper.to_array(attrs["value"])
@@ -197,7 +765,7 @@ def _eval_model(model: ModelIR, inputs: dict[str, np.ndarray]) -> dict[str, np.n
 
     for node in model.nodes:
         op = node.op_type
-        ins = [tensors[name] for name in node.inputs]
+        ins = [tensors[name] if name else None for name in node.inputs]
         out_name = node.outputs[0]
         out_dtype = model.tensors[out_name].dtype
 
@@ -590,27 +1158,41 @@ def _eval_model(model: ModelIR, inputs: dict[str, np.ndarray]) -> dict[str, np.n
             continue
 
         if op == "MeanVarianceNormalization":
-            if out_dtype in ("int8", "int16"):
-                raise ValueError("MeanVarianceNormalization quantized mode is not supported.")
-            x = ins[0].astype(np.float32)
-            if x.ndim != 4:
-                raise ValueError("MeanVarianceNormalization expects 4D input.")
+            x = ins[0]
+            if x.ndim <= 0:
+                raise ValueError("MeanVarianceNormalization expects rank >= 1.")
             axes = node.attrs.get("axes", [0, 2, 3])
-            if not isinstance(axes, (list, tuple)):
-                raise ValueError("MeanVarianceNormalization axes must be a list.")
+            if isinstance(axes, (list, tuple)):
+                axes_raw = [int(v) for v in axes]
+            else:
+                axes_raw = [int(axes)]
             norm_axes: list[int] = []
-            for axis in axes:
+            seen_axes: set[int] = set()
+            for axis in axes_raw:
                 ax = int(axis)
                 if ax < 0:
                     ax += x.ndim
                 if ax < 0 or ax >= x.ndim:
                     raise ValueError("MeanVarianceNormalization axis out of range.")
+                if ax in seen_axes:
+                    continue
+                seen_axes.add(ax)
                 norm_axes.append(ax)
-            if set(norm_axes) != {0, 2, 3}:
-                raise ValueError("MeanVarianceNormalization currently supports axes=[0,2,3] only.")
-            mean = np.mean(x, axis=tuple(norm_axes), keepdims=True)
-            var = np.mean(np.square(x - mean), axis=tuple(norm_axes), keepdims=True)
-            tensors[out_name] = (x - mean) / np.sqrt(var + 1e-12)
+            axes_tuple = tuple(norm_axes)
+            eps = float(node.attrs.get("epsilon", 1e-12))
+            if out_dtype in ("int8", "int16"):
+                sx, zx = _qparams(model, node.inputs[0])
+                so, zo = _qparams(model, out_name)
+                x_f = _dequantize_int(x, sx, zx)
+                mean = np.mean(x_f, axis=axes_tuple, keepdims=True)
+                var = np.mean(np.square(x_f - mean), axis=axes_tuple, keepdims=True)
+                y_f = (x_f - mean) / np.sqrt(var + eps)
+                tensors[out_name] = _quantize_float(y_f.astype(np.float32), so, zo, out_dtype)
+            else:
+                x_f = x.astype(np.float32)
+                mean = np.mean(x_f, axis=axes_tuple, keepdims=True)
+                var = np.mean(np.square(x_f - mean), axis=axes_tuple, keepdims=True)
+                tensors[out_name] = ((x_f - mean) / np.sqrt(var + eps)).astype(np.float32)
             continue
 
         if op in (
@@ -877,10 +1459,12 @@ def _eval_model(model: ModelIR, inputs: dict[str, np.ndarray]) -> dict[str, np.n
         if op == "MatMulInteger":
             if len(ins) < 2:
                 raise ValueError("MatMulInteger expects at least 2 inputs.")
+            if ins[0] is None or ins[1] is None:
+                raise ValueError("MatMulInteger expects valid A/B inputs.")
             a = ins[0].astype(np.int64)
             b = ins[1].astype(np.int64)
-            a_zero = int(ins[2].reshape(-1)[0]) if len(ins) >= 3 else 0
-            b_zero = int(ins[3].reshape(-1)[0]) if len(ins) >= 4 else 0
+            a_zero = int(ins[2].reshape(-1)[0]) if len(ins) >= 3 and ins[2] is not None else 0
+            b_zero = int(ins[3].reshape(-1)[0]) if len(ins) >= 4 and ins[3] is not None else 0
             out = np.matmul(a - a_zero, b - b_zero)
             if out_dtype == "int32":
                 tensors[out_name] = out.astype(np.int32)
@@ -893,6 +1477,8 @@ def _eval_model(model: ModelIR, inputs: dict[str, np.ndarray]) -> dict[str, np.n
         if op == "QLinearMatMul":
             if len(ins) < 8:
                 raise ValueError("QLinearMatMul expects 8 inputs.")
+            if any(v is None for v in ins[:8]):
+                raise ValueError("QLinearMatMul expects valid non-empty inputs.")
             a = ins[0].astype(np.int64)
             a_scale = float(ins[1].reshape(-1)[0])
             a_zero = int(ins[2].reshape(-1)[0])
@@ -914,6 +1500,18 @@ def _eval_model(model: ModelIR, inputs: dict[str, np.ndarray]) -> dict[str, np.n
                 tensors[out_name] = q.astype(np.int16)
             else:
                 raise ValueError("QLinearMatMul output dtype must be int8/int16.")
+            continue
+
+        if op == "RNN":
+            _eval_rnn_node(model, node, tensors)
+            continue
+
+        if op == "GRU":
+            _eval_gru_node(model, node, tensors)
+            continue
+
+        if op == "LSTM":
+            _eval_lstm_node(model, node, tensors)
             continue
 
         if op in ("ArgMax", "ArgMin"):
@@ -954,31 +1552,212 @@ def _eval_model(model: ModelIR, inputs: dict[str, np.ndarray]) -> dict[str, np.n
         if op == "Gemm":
             a, b = ins[0], ins[1]
             c = ins[2] if len(ins) >= 3 else None
+            trans_a = int(node.attrs.get("transA", 0))
+            trans_b = int(node.attrs.get("transB", 0))
+            if trans_a not in (0, 1) or trans_b not in (0, 1):
+                raise ValueError("Gemm transA/transB must be 0 or 1.")
+            alpha = float(node.attrs.get("alpha", 1.0))
+            beta = float(node.attrs.get("beta", 1.0))
+
+            def _gemm_broadcast_c(c_arr: np.ndarray, m_dim: int, n_dim: int) -> np.ndarray:
+                if c_arr.ndim == 0:
+                    return c_arr.reshape(())
+                if c_arr.ndim == 1:
+                    if c_arr.shape[0] == n_dim:
+                        return c_arr.reshape(1, n_dim)
+                    if c_arr.shape[0] == m_dim:
+                        return c_arr.reshape(m_dim, 1)
+                    if c_arr.shape[0] == m_dim * n_dim:
+                        return c_arr.reshape(m_dim, n_dim)
+                    raise ValueError("Gemm C shape is not broadcastable.")
+                if c_arr.ndim == 2:
+                    return c_arr
+                raise ValueError("Gemm C rank > 2 is not supported.")
+
             if out_dtype in ("int8", "int16"):
                 sa, za = _qparams(model, node.inputs[0])
                 sb, zb = _qparams(model, node.inputs[1])
                 so, zo = _qparams(model, out_name)
                 ra = _dequantize_int(a, sa, za)
                 rb = _dequantize_int(b, sb, zb)
-                out = np.matmul(ra, rb)
+                ra_m = ra.T if trans_a == 1 else ra
+                rb_m = rb.T if trans_b == 1 else rb
+                out = np.matmul(ra_m, rb_m)
+                out = alpha * out
                 if c is not None:
                     c_dtype = _tensor_dtype(model.tensors[node.inputs[2]])
+                    c_arr = _gemm_broadcast_c(c, out.shape[0], out.shape[1])
                     if c_dtype == "float32":
-                        out = out + c
+                        out = out + beta * c_arr.astype(np.float32)
                     elif c_dtype in ("int32", "int64"):
-                        out = out + (c.astype(np.float32) * (sa * sb))
+                        out = out + beta * (c_arr.astype(np.float32) * (sa * sb))
                     else:
                         sc, zc = _qparams(model, node.inputs[2])
-                        out = out + _dequantize_int(c, sc, zc)
+                        out = out + beta * _dequantize_int(c_arr, sc, zc)
                 tensors[out_name] = _quantize_float(out, so, zo, out_dtype)
             else:
-                out = np.matmul(a, b)
+                af = a.astype(np.float32, copy=False)
+                bf = b.astype(np.float32, copy=False)
+                af_m = af.T if trans_a == 1 else af
+                bf_m = bf.T if trans_b == 1 else bf
+                out = np.matmul(af_m, bf_m)
+                out = alpha * out
                 if c is not None:
-                    if c.size == out.shape[1]:
-                        out = out + c
+                    c_arr = _gemm_broadcast_c(c, out.shape[0], out.shape[1]).astype(np.float32)
+                    out = out + beta * c_arr
+                tensors[out_name] = out.astype(np.float32)
+            continue
+
+        if op == "NegativeLogLikelihoodLoss":
+            x = ins[0]
+            target = ins[1].astype(np.int64, copy=False)
+            weight = ins[2] if len(ins) >= 3 and node.inputs[2] else None
+            if x.ndim < 2:
+                raise ValueError("NegativeLogLikelihoodLoss expects input rank >= 2.")
+            n_size = int(x.shape[0])
+            c_size = int(x.shape[1])
+            spatial_shape = tuple(int(v) for v in x.shape[2:])
+            expected_target = (n_size, *spatial_shape)
+            if tuple(int(v) for v in target.shape) != expected_target:
+                raise ValueError("NegativeLogLikelihoodLoss target shape mismatch.")
+            x_dtype = _tensor_dtype(model.tensors[node.inputs[0]])
+            x_tensor = model.tensors[node.inputs[0]]
+            if x_dtype in ("int8", "int16") and x_tensor.qscale is not None and x_tensor.qzero is not None:
+                sx, zx = _qparams(model, node.inputs[0])
+                x_f = _dequantize_int(x, sx, zx)
+            else:
+                x_f = x.astype(np.float32, copy=False)
+            weight_f = None
+            if weight is not None:
+                w_dtype = _tensor_dtype(model.tensors[node.inputs[2]])
+                w_tensor = model.tensors[node.inputs[2]]
+                if w_dtype in ("int8", "int16") and w_tensor.qscale is not None and w_tensor.qzero is not None:
+                    sw, zw = _qparams(model, node.inputs[2])
+                    weight_f = _dequantize_int(weight, sw, zw)
+                else:
+                    weight_f = weight.astype(np.float32, copy=False)
+                if weight_f.ndim != 1 or int(weight_f.shape[0]) != c_size:
+                    raise ValueError("NegativeLogLikelihoodLoss weight shape mismatch.")
+
+            reduction = node.attrs.get("reduction", "mean")
+            if isinstance(reduction, bytes):
+                reduction = reduction.decode("utf-8", errors="ignore")
+            reduction = str(reduction).lower()
+            if reduction not in ("none", "mean", "sum"):
+                raise ValueError("NegativeLogLikelihoodLoss reduction must be none/mean/sum.")
+            ignore_index = int(node.attrs.get("ignore_index", -100))
+
+            inner = int(np.prod(spatial_shape, dtype=np.int64)) if spatial_shape else 1
+            x_r = x_f.reshape(n_size, c_size, inner)
+            t_r = target.reshape(n_size, inner)
+            loss = np.zeros((n_size, inner), dtype=np.float32)
+            total_loss = 0.0
+            total_weight = 0.0
+            for ni in range(n_size):
+                for pi in range(inner):
+                    cls = int(t_r[ni, pi])
+                    if cls == ignore_index or cls < 0 or cls >= c_size:
+                        continue
+                    v = -float(x_r[ni, cls, pi])
+                    if weight_f is not None:
+                        wv = float(weight_f[cls])
+                        v *= wv
+                        total_weight += wv
                     else:
-                        out = out + c.reshape(out.shape)
-                tensors[out_name] = out
+                        total_weight += 1.0
+                    loss[ni, pi] = v
+                    total_loss += v
+
+            if reduction == "none":
+                tensors[out_name] = loss.reshape(expected_target).astype(np.float32)
+            elif reduction == "sum":
+                tensors[out_name] = np.array(total_loss, dtype=np.float32).reshape(())
+            else:
+                mean_v = (total_loss / total_weight) if total_weight > 0.0 else 0.0
+                tensors[out_name] = np.array(mean_v, dtype=np.float32).reshape(())
+            continue
+
+        if op == "SoftmaxCrossEntropyLoss":
+            x = ins[0]
+            target = ins[1].astype(np.int64, copy=False)
+            weight = ins[2] if len(ins) >= 3 and node.inputs[2] else None
+            loss_name = node.outputs[0]
+            logp_name = node.outputs[1] if len(node.outputs) == 2 and node.outputs[1] else None
+            if x.ndim < 2:
+                raise ValueError("SoftmaxCrossEntropyLoss expects logits rank >= 2.")
+            n_size = int(x.shape[0])
+            c_size = int(x.shape[1])
+            spatial_shape = tuple(int(v) for v in x.shape[2:])
+            expected_target = (n_size, *spatial_shape)
+            if tuple(int(v) for v in target.shape) != expected_target:
+                raise ValueError("SoftmaxCrossEntropyLoss target shape mismatch.")
+            x_dtype = _tensor_dtype(model.tensors[node.inputs[0]])
+            x_tensor = model.tensors[node.inputs[0]]
+            if x_dtype in ("int8", "int16") and x_tensor.qscale is not None and x_tensor.qzero is not None:
+                sx, zx = _qparams(model, node.inputs[0])
+                x_f = _dequantize_int(x, sx, zx)
+            else:
+                x_f = x.astype(np.float32, copy=False)
+
+            weight_f = None
+            if weight is not None:
+                w_dtype = _tensor_dtype(model.tensors[node.inputs[2]])
+                w_tensor = model.tensors[node.inputs[2]]
+                if w_dtype in ("int8", "int16") and w_tensor.qscale is not None and w_tensor.qzero is not None:
+                    sw, zw = _qparams(model, node.inputs[2])
+                    weight_f = _dequantize_int(weight, sw, zw)
+                else:
+                    weight_f = weight.astype(np.float32, copy=False)
+                if weight_f.ndim != 1 or int(weight_f.shape[0]) != c_size:
+                    raise ValueError("SoftmaxCrossEntropyLoss weight shape mismatch.")
+
+            reduction = node.attrs.get("reduction", "mean")
+            if isinstance(reduction, bytes):
+                reduction = reduction.decode("utf-8", errors="ignore")
+            reduction = str(reduction).lower()
+            if reduction not in ("none", "mean", "sum"):
+                raise ValueError("SoftmaxCrossEntropyLoss reduction must be none/mean/sum.")
+            ignore_index = int(node.attrs.get("ignore_index", -100))
+
+            inner = int(np.prod(spatial_shape, dtype=np.int64)) if spatial_shape else 1
+            x_r = x_f.reshape(n_size, c_size, inner)
+            t_r = target.reshape(n_size, inner)
+            logp = np.empty_like(x_r, dtype=np.float32) if logp_name is not None else None
+            loss = np.zeros((n_size, inner), dtype=np.float32)
+            total_loss = 0.0
+            total_weight = 0.0
+            for ni in range(n_size):
+                for pi in range(inner):
+                    logits = x_r[ni, :, pi].astype(np.float32, copy=False)
+                    max_v = float(np.max(logits))
+                    shifted = logits - max_v
+                    exp_sum = float(np.sum(np.exp(shifted)))
+                    log_sum = float(np.log(exp_sum))
+                    lp = logits - max_v - log_sum
+                    if logp is not None:
+                        logp[ni, :, pi] = lp
+                    cls = int(t_r[ni, pi])
+                    if cls == ignore_index or cls < 0 or cls >= c_size:
+                        continue
+                    sample = -float(lp[cls])
+                    if weight_f is not None:
+                        wv = float(weight_f[cls])
+                        sample *= wv
+                        total_weight += wv
+                    else:
+                        total_weight += 1.0
+                    loss[ni, pi] = sample
+                    total_loss += sample
+
+            if reduction == "none":
+                tensors[loss_name] = loss.reshape(expected_target).astype(np.float32)
+            elif reduction == "sum":
+                tensors[loss_name] = np.array(total_loss, dtype=np.float32).reshape(())
+            else:
+                mean_v = (total_loss / total_weight) if total_weight > 0.0 else 0.0
+                tensors[loss_name] = np.array(mean_v, dtype=np.float32).reshape(())
+            if logp is not None:
+                tensors[logp_name] = logp.reshape(x.shape).astype(np.float32)
             continue
 
         if op == "Softmax":
@@ -1521,9 +2300,48 @@ def _eval_model(model: ModelIR, inputs: dict[str, np.ndarray]) -> dict[str, np.n
             continue
 
         if op == "Expand":
-            shape_vals = _const_ints(tensors, node.inputs[1])
-            target = tuple(int(v) for v in shape_vals)
+            target = tuple(int(v) for v in model.tensors[out_name].shape)
             tensors[out_name] = np.broadcast_to(ins[0], target).copy()
+            continue
+
+        if op == "CumSum":
+            if len(ins) < 2:
+                raise ValueError("CumSum expects data and axis.")
+            x = ins[0]
+            axis_arr = ins[1].reshape(-1)
+            if axis_arr.size != 1:
+                raise ValueError("CumSum axis input must be scalar.")
+            axis = int(axis_arr[0])
+            if axis < 0:
+                axis += x.ndim
+            if axis < 0 or axis >= x.ndim:
+                raise ValueError("CumSum axis out of range.")
+            exclusive = int(node.attrs.get("exclusive", 0))
+            reverse = int(node.attrs.get("reverse", 0))
+            if exclusive not in (0, 1) or reverse not in (0, 1):
+                raise ValueError("CumSum exclusive/reverse must be 0 or 1.")
+            x_work = np.flip(x, axis=axis) if reverse == 1 else x
+            if x.dtype == np.float32:
+                out = np.cumsum(x_work.astype(np.float32), axis=axis, dtype=np.float32)
+                if exclusive == 1:
+                    out = out - x_work.astype(np.float32)
+                if reverse == 1:
+                    out = np.flip(out, axis=axis)
+                tensors[out_name] = out.astype(np.float32)
+                continue
+            acc = np.cumsum(x_work.astype(np.int64), axis=axis, dtype=np.int64)
+            if exclusive == 1:
+                acc = acc - x_work.astype(np.int64)
+            if reverse == 1:
+                acc = np.flip(acc, axis=axis)
+            if out_dtype == "int8":
+                tensors[out_name] = np.clip(acc, -128, 127).astype(np.int8)
+            elif out_dtype == "int16":
+                tensors[out_name] = np.clip(acc, -32768, 32767).astype(np.int16)
+            elif out_dtype == "int32":
+                tensors[out_name] = np.clip(acc, -2147483648, 2147483647).astype(np.int32)
+            else:
+                tensors[out_name] = acc.astype(np.int64)
             continue
 
         if op == "Tile":
@@ -1755,19 +2573,19 @@ def _eval_model(model: ModelIR, inputs: dict[str, np.ndarray]) -> dict[str, np.n
             x = ins[0]
             w = ins[1]
             b = ins[2] if len(ins) > 2 else None
-            if out_dtype != "float32":
-                raise ValueError("ConvTranspose quantized mode is not supported.")
             strides = list(node.attrs.get("strides", [1, 1]))
             pads = list(node.attrs.get("pads", [0, 0, 0, 0]))
             dilations = list(node.attrs.get("dilations", [1, 1]))
             output_padding = list(node.attrs.get("output_padding", [0, 0]))
             groups = int(node.attrs.get("group", 1))
-            if groups != 1:
-                raise ValueError("ConvTranspose currently supports group=1 only.")
+            if groups <= 0:
+                raise ValueError("ConvTranspose group must be positive.")
             if x.ndim != 4 or w.ndim != 4:
                 raise ValueError("ConvTranspose expects 4D tensors (NCHW).")
             n, c_in, h, w_in = x.shape
             wc_in, c_out_per_group, k_h, k_w = w.shape
+            if c_in % groups != 0:
+                raise ValueError("ConvTranspose input channels must be divisible by group.")
             if wc_in != c_in:
                 raise ValueError("ConvTranspose channel mismatch.")
             if len(pads) == 2:
@@ -1781,21 +2599,56 @@ def _eval_model(model: ModelIR, inputs: dict[str, np.ndarray]) -> dict[str, np.n
             out_h = (h - 1) * stride_h - pad_h0 - pad_h1 + dil_h * (k_h - 1) + out_pad_h + 1
             out_w = (w_in - 1) * stride_w - pad_w0 - pad_w1 + dil_w * (k_w - 1) + out_pad_w + 1
             c_out = c_out_per_group * groups
+            ic_per_group = c_in // groups
             out = np.zeros((n, c_out, out_h, out_w), dtype=np.float32)
+            quant_mode = out_dtype in ("int8", "int16")
+            if quant_mode:
+                if _tensor_dtype(model.tensors[node.inputs[0]]) != out_dtype:
+                    raise ValueError("ConvTranspose quantized input dtype mismatch.")
+                if _tensor_dtype(model.tensors[node.inputs[1]]) != out_dtype:
+                    raise ValueError("ConvTranspose quantized weight dtype mismatch.")
+                sx, zx = _qparams(model, node.inputs[0])
+                sw, zw = _qparams(model, node.inputs[1])
+                so, zo = _qparams(model, out_name)
+                x_f = _dequantize_int(x, sx, zx)
+                w_f = _dequantize_int(w, sw, zw)
+            else:
+                x_f = x.astype(np.float32, copy=False)
+                w_f = w.astype(np.float32, copy=False)
+
             if b is not None:
-                out += b.reshape(1, c_out, 1, 1).astype(np.float32)
+                b_dtype = _tensor_dtype(model.tensors[node.inputs[2]])
+                if quant_mode:
+                    if b_dtype == "float32":
+                        b_f = b.astype(np.float32)
+                    elif b_dtype in ("int32", "int64"):
+                        b_f = b.astype(np.float32) * (sx * sw)
+                    elif b_dtype in ("int8", "int16"):
+                        sb, zb = _qparams(model, node.inputs[2])
+                        b_f = _dequantize_int(b, sb, zb)
+                    else:
+                        raise ValueError("ConvTranspose quantized bias dtype is unsupported.")
+                else:
+                    b_f = b.astype(np.float32)
+                out += b_f.reshape(1, c_out, 1, 1)
             for ni in range(n):
                 for ic in range(c_in):
+                    g = ic // ic_per_group
+                    oc0 = g * c_out_per_group
+                    oc1 = oc0 + c_out_per_group
                     for ih in range(h):
                         for iw in range(w_in):
-                            xv = float(x[ni, ic, ih, iw])
+                            xv = float(x_f[ni, ic, ih, iw])
                             for kh in range(k_h):
                                 for kw in range(k_w):
                                     oh = ih * stride_h + kh * dil_h - pad_h0
                                     ow = iw * stride_w + kw * dil_w - pad_w0
                                     if 0 <= oh < out_h and 0 <= ow < out_w:
-                                        out[ni, :, oh, ow] += xv * w[ic, :, kh, kw]
-            tensors[out_name] = out
+                                        out[ni, oc0:oc1, oh, ow] += xv * w_f[ic, :, kh, kw]
+            if quant_mode:
+                tensors[out_name] = _quantize_float(out, so, zo, out_dtype)
+            else:
+                tensors[out_name] = out.astype(np.float32)
             continue
 
         if op in ("MaxPool", "AveragePool", "LpPool"):
@@ -2068,28 +2921,41 @@ def _eval_model(model: ModelIR, inputs: dict[str, np.ndarray]) -> dict[str, np.n
             if indices.ndim <= 0:
                 raise ValueError("GatherND requires rank >= 1 indices.")
             batch_dims = int(node.attrs.get("batch_dims", 0))
-            if batch_dims != 0:
-                raise ValueError("GatherND currently supports batch_dims=0 only.")
+            if batch_dims < 0:
+                batch_dims += min(data.ndim, indices.ndim - 1)
+            if batch_dims < 0 or batch_dims >= data.ndim or batch_dims >= indices.ndim:
+                raise ValueError("GatherND batch_dims out of range.")
             k = int(indices.shape[-1])
-            if k < 0 or k > data.ndim:
+            if k < 0 or k > (data.ndim - batch_dims):
                 raise ValueError("GatherND indices last dim out of range.")
-            out_shape = tuple(indices.shape[:-1]) + tuple(data.shape[k:])
-            tail_size = int(np.prod(data.shape[k:])) if k < data.ndim else 1
+            idx_suffix_rank = indices.ndim - batch_dims - 1
+            tail_rank = data.ndim - batch_dims - k
+            out_shape = tuple(data.shape[:batch_dims]) + tuple(indices.shape[batch_dims:-1]) + tuple(
+                data.shape[batch_dims + k :]
+            )
             out = np.empty(out_shape, dtype=data.dtype)
-            out_flat = out.reshape(-1, tail_size)
-            idx_flat = indices.reshape(-1, k)
-            for i in range(idx_flat.shape[0]):
-                coord: list[int] = []
+            for out_idx in np.ndindex(out_shape if out_shape else (1,)):
+                out_idx_eff = () if out_shape == () else tuple(int(v) for v in out_idx)
+                batch_coord = list(out_idx_eff[:batch_dims])
+                idx_suffix_coord = list(out_idx_eff[batch_dims : batch_dims + idx_suffix_rank])
+                tail_coord = list(out_idx_eff[batch_dims + idx_suffix_rank :])
+                data_coord = list(batch_coord)
                 for j in range(k):
-                    v = int(idx_flat[i, j])
-                    dim = int(data.shape[j])
+                    idx_coord = tuple(batch_coord + idx_suffix_coord + [j])
+                    v = int(indices[idx_coord])
+                    dim = int(data.shape[batch_dims + j])
                     if v < 0:
                         v += dim
                     if v < 0 or v >= dim:
                         raise ValueError("GatherND index out of range.")
-                    coord.append(v)
-                sub = data[tuple(coord)] if k > 0 else data
-                out_flat[i, :] = np.asarray(sub, dtype=data.dtype).reshape(-1)
+                    data_coord.append(v)
+                if tail_rank > 0:
+                    data_coord.extend(tail_coord)
+                value = data[tuple(data_coord)]
+                if out_shape == ():
+                    out = np.array(value, dtype=data.dtype).reshape(())
+                else:
+                    out[out_idx_eff] = value
             tensors[out_name] = out
             continue
 
@@ -2108,6 +2974,54 @@ def _eval_model(model: ModelIR, inputs: dict[str, np.ndarray]) -> dict[str, np.n
             if np.any(adj < 0) or np.any(adj >= axis_dim):
                 raise ValueError("GatherElements index out of range.")
             tensors[out_name] = np.take_along_axis(data, adj, axis=axis)
+            continue
+
+        if op == "OneHot":
+            indices = ins[0].astype(np.int64, copy=False)
+            depth_arr = ins[1].reshape(-1)
+            if depth_arr.size != 1:
+                raise ValueError("OneHot depth must be scalar.")
+            depth = int(depth_arr[0])
+            if depth <= 0:
+                raise ValueError("OneHot depth must be positive.")
+            values = ins[2].reshape(-1)
+            if values.size != 2:
+                raise ValueError("OneHot values must contain [off, on].")
+            out_dtype_np = {
+                "float32": np.float32,
+                "int8": np.int8,
+                "int16": np.int16,
+                "int32": np.int32,
+                "int64": np.int64,
+                "bool": np.bool_,
+            }.get(out_dtype)
+            if out_dtype_np is None:
+                raise ValueError("OneHot output dtype is unsupported.")
+            out_rank = indices.ndim + 1
+            axis = int(node.attrs.get("axis", -1))
+            if axis < 0:
+                axis += out_rank
+            if axis < 0 or axis >= out_rank:
+                raise ValueError("OneHot axis out of range.")
+            out_shape = list(indices.shape)
+            out_shape.insert(axis, depth)
+            out = np.full(out_shape, values[0], dtype=out_dtype_np)
+            if indices.ndim == 0:
+                cls = int(indices.reshape(()))
+                cls %= depth
+                if cls < 0:
+                    cls += depth
+                out[(cls,)] = values[1]
+            else:
+                for idx_t in np.ndindex(indices.shape):
+                    cls = int(indices[idx_t])
+                    cls %= depth
+                    if cls < 0:
+                        cls += depth
+                    dst = list(idx_t)
+                    dst.insert(axis, cls)
+                    out[tuple(dst)] = values[1]
+            tensors[out_name] = out.astype(out_dtype_np, copy=False)
             continue
 
         if op == "ReverseSequence":
@@ -2151,13 +3065,28 @@ def _eval_model(model: ModelIR, inputs: dict[str, np.ndarray]) -> dict[str, np.n
 
         if op == "Det":
             data = ins[0]
-            if out_dtype in ("int8", "int16"):
-                raise ValueError("Det quantized mode is not supported.")
-            if data.ndim != 2:
-                raise ValueError("Det currently supports 2D input only.")
-            if data.shape[0] != data.shape[1]:
+            if data.ndim < 2:
+                raise ValueError("Det expects input rank >= 2.")
+            if data.shape[-2] != data.shape[-1]:
                 raise ValueError("Det requires square matrix.")
-            tensors[out_name] = np.array(np.linalg.det(data.astype(np.float32)), dtype=np.float32)
+            x_dtype = _tensor_dtype(model.tensors[node.inputs[0]])
+            if x_dtype in ("int8", "int16"):
+                x_tensor = model.tensors[node.inputs[0]]
+                if x_tensor.qscale is not None and x_tensor.qzero is not None:
+                    sx, zx = _qparams(model, node.inputs[0])
+                    data_f = _dequantize_int(data, sx, zx)
+                else:
+                    data_f = data.astype(np.float32, copy=False)
+            else:
+                data_f = data.astype(np.float32, copy=False)
+            n = int(data.shape[-1])
+            mats = data_f.reshape(-1, n, n)
+            det_vals = np.linalg.det(mats).astype(np.float32).reshape(data.shape[:-2])
+            if out_dtype in ("int8", "int16"):
+                so, zo = _qparams(model, out_name)
+                tensors[out_name] = _quantize_float(det_vals, so, zo, out_dtype)
+            else:
+                tensors[out_name] = det_vals.astype(np.float32)
             continue
 
         if op == "Scatter":
@@ -2361,14 +3290,36 @@ def _eval_model(model: ModelIR, inputs: dict[str, np.ndarray]) -> dict[str, np.n
                 pads = _const_ints(tensors, node.inputs[1])
             if pads is None:
                 raise ValueError("Pad requires pads.")
+            mode = node.attrs.get("mode", "constant")
+            if isinstance(mode, bytes):
+                mode = mode.decode("utf-8", errors="ignore")
+            mode = str(mode).lower()
             value = float(node.attrs.get("value", 0.0))
+            if len(node.inputs) >= 3 and node.inputs[2]:
+                v_arr = tensors[node.inputs[2]].reshape(-1)
+                if v_arr.size > 0:
+                    value = float(v_arr[0])
             rank = ins[0].ndim
             if len(pads) != rank * 2:
                 raise ValueError("Pad pads length mismatch.")
             pad_begin = pads[:rank]
             pad_end = pads[rank:]
             pad_width = [(pad_begin[i], pad_end[i]) for i in range(rank)]
-            tensors[out_name] = np.pad(ins[0], pad_width, mode="constant", constant_values=value)
+            if mode == "constant":
+                if out_dtype in ("int8", "int16"):
+                    so, zo = _qparams(model, out_name)
+                    qmin, qmax = (-128, 127) if out_dtype == "int8" else (-32768, 32767)
+                    qv = int(round(value / so) + zo)
+                    qv = min(max(qv, qmin), qmax)
+                    tensors[out_name] = np.pad(ins[0], pad_width, mode="constant", constant_values=qv)
+                else:
+                    tensors[out_name] = np.pad(ins[0], pad_width, mode="constant", constant_values=value)
+            elif mode == "reflect":
+                tensors[out_name] = np.pad(ins[0], pad_width, mode="reflect")
+            elif mode == "edge":
+                tensors[out_name] = np.pad(ins[0], pad_width, mode="edge")
+            else:
+                raise ValueError("Pad mode must be constant/reflect/edge.")
             continue
 
         if op == "Slice":
@@ -2386,18 +3337,27 @@ def _eval_model(model: ModelIR, inputs: dict[str, np.ndarray]) -> dict[str, np.n
                 steps = _const_ints(tensors, node.inputs[4])
             if starts is None or ends is None:
                 raise ValueError("Slice requires starts/ends.")
-            if steps is not None and any(int(v) != 1 for v in steps):
-                raise ValueError("Slice steps != 1 not supported.")
             data = ins[0]
             rank = data.ndim
             if axes is None:
                 axes = list(range(rank))
+            if steps is None:
+                steps = [1] * len(axes)
+            if len(axes) != len(starts) or len(axes) != len(ends) or len(axes) != len(steps):
+                raise ValueError("Slice axes/starts/ends/steps length mismatch.")
             slices = [slice(None)] * rank
-            for idx, axis in enumerate(axes):
-                axis = int(axis)
+            for idx, axis_v in enumerate(axes):
+                axis = int(axis_v)
+                if axis < 0:
+                    axis += rank
+                if axis < 0 or axis >= rank:
+                    raise ValueError("Slice axis out of range.")
                 s = int(starts[idx])
                 e = int(ends[idx])
-                slices[axis] = slice(s, e, 1)
+                st = int(steps[idx])
+                if st == 0:
+                    raise ValueError("Slice step must be non-zero.")
+                slices[axis] = slice(s, e, st)
             tensors[out_name] = data[tuple(slices)]
             continue
 

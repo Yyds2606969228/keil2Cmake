@@ -19,6 +19,7 @@ sys.path.insert(0, str(SRC))
 from keil2cmake.tinyml.project import generate_tinyml_project
 from keil2cmake.tinyml.converter import load_onnx_model
 from keil2cmake.tinyml.runtime import validate_model_consistency
+from keil2cmake.tinyml.runtime.c_runner import run_generated_c_model
 from keil2cmake.tinyml.runtime.validator import _eval_model
 
 
@@ -893,6 +894,330 @@ def _build_qlinear_matmul_model(path: str) -> None:
         [x],
         [y],
         [w, a_scale, b_scale, y_scale, a_zero, b_zero, y_zero],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid('', 13)])
+    onnx.save(model, path)
+
+
+def _build_matmul_integer_batched_model(path: str) -> None:
+    x = helper.make_tensor_value_info('input', TensorProto.INT8, [2, 2, 3])
+    y = helper.make_tensor_value_info('output', TensorProto.FLOAT, [2, 2, 4])
+    w = numpy_helper.from_array(
+        np.array(
+            [
+                [[1, -2, 0, 3], [2, 1, -1, 0], [-1, 2, 1, 1]],
+            ],
+            dtype=np.int8,
+        ),
+        name='W',
+    )
+    a_zero = numpy_helper.from_array(np.array([0], dtype=np.int8), name='a_zero')
+    b_zero = numpy_helper.from_array(np.array([0], dtype=np.int8), name='b_zero')
+    node_mm = helper.make_node(
+        'MatMulInteger',
+        inputs=['input', 'W', 'a_zero', 'b_zero'],
+        outputs=['mm_i32'],
+    )
+    node_cast = helper.make_node('Cast', inputs=['mm_i32'], outputs=['output'], to=TensorProto.FLOAT)
+    value_info = [helper.make_tensor_value_info('mm_i32', TensorProto.INT32, [2, 2, 4])]
+    graph = helper.make_graph(
+        [node_mm, node_cast],
+        'matmul_integer_batched_test',
+        [x],
+        [y],
+        [w, a_zero, b_zero],
+        value_info=value_info,
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid('', 13)])
+    onnx.save(model, path)
+
+
+def _build_qlinear_matmul_batched_model(path: str) -> None:
+    x = helper.make_tensor_value_info('input', TensorProto.INT8, [2, 2, 3])
+    y = helper.make_tensor_value_info('output', TensorProto.INT8, [2, 2, 4])
+    w = numpy_helper.from_array(
+        np.array(
+            [
+                [[1, -2, 0, 3], [2, 1, -1, 0], [-1, 2, 1, 1]],
+            ],
+            dtype=np.int8,
+        ),
+        name='W',
+    )
+    a_scale = numpy_helper.from_array(np.array([0.125], dtype=np.float32), name='a_scale')
+    b_scale = numpy_helper.from_array(np.array([0.0625], dtype=np.float32), name='b_scale')
+    y_scale = numpy_helper.from_array(np.array([0.25], dtype=np.float32), name='y_scale')
+    a_zero = numpy_helper.from_array(np.array([0], dtype=np.int8), name='a_zero')
+    b_zero = numpy_helper.from_array(np.array([0], dtype=np.int8), name='b_zero')
+    y_zero = numpy_helper.from_array(np.array([0], dtype=np.int8), name='y_zero')
+    node = helper.make_node(
+        'QLinearMatMul',
+        inputs=['input', 'a_scale', 'a_zero', 'W', 'b_scale', 'b_zero', 'y_scale', 'y_zero'],
+        outputs=['output'],
+    )
+    graph = helper.make_graph(
+        [node],
+        'qlinear_matmul_batched_test',
+        [x],
+        [y],
+        [w, a_scale, b_scale, y_scale, a_zero, b_zero, y_zero],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid('', 13)])
+    onnx.save(model, path)
+
+
+def _build_rnn_reverse_seq_model(path: str) -> None:
+    x = helper.make_tensor_value_info('input', TensorProto.FLOAT, [4, 1, 1])
+    y = helper.make_tensor_value_info('output', TensorProto.FLOAT, [4, 1, 1, 1])
+    w = numpy_helper.from_array(np.array([[[1.0]]], dtype=np.float32), name='W')
+    r = numpy_helper.from_array(np.array([[[0.5]]], dtype=np.float32), name='R')
+    b = numpy_helper.from_array(np.array([[0.0, 0.0]], dtype=np.float32), name='B')
+    seq_lens = numpy_helper.from_array(np.array([2], dtype=np.int32), name='seq_lens')
+    node = helper.make_node(
+        'RNN',
+        inputs=['input', 'W', 'R', 'B', 'seq_lens'],
+        outputs=['output'],
+        direction='reverse',
+        hidden_size=1,
+    )
+    graph = helper.make_graph([node], 'rnn_reverse_seq_test', [x], [y], [w, r, b, seq_lens])
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid('', 13)])
+    onnx.save(model, path)
+
+
+def _build_rnn_bidirectional_model(path: str) -> None:
+    x = helper.make_tensor_value_info('input', TensorProto.FLOAT, [4, 1, 1])
+    y = helper.make_tensor_value_info('output', TensorProto.FLOAT, [4, 2, 1, 1])
+    w = numpy_helper.from_array(np.array([[[1.0]], [[1.0]]], dtype=np.float32), name='W')
+    r = numpy_helper.from_array(np.array([[[0.5]], [[-0.25]]], dtype=np.float32), name='R')
+    b = numpy_helper.from_array(np.zeros((2, 2), dtype=np.float32), name='B')
+    node = helper.make_node(
+        'RNN',
+        inputs=['input', 'W', 'R', 'B'],
+        outputs=['output'],
+        direction='bidirectional',
+        hidden_size=1,
+    )
+    graph = helper.make_graph([node], 'rnn_bidirectional_test', [x], [y], [w, r, b])
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid('', 13)])
+    onnx.save(model, path)
+
+
+def _build_gru_reverse_lbr1_model(path: str) -> None:
+    x = helper.make_tensor_value_info('input', TensorProto.FLOAT, [4, 1, 1])
+    y = helper.make_tensor_value_info('output', TensorProto.FLOAT, [4, 1, 1, 1])
+    w_data = np.zeros((1, 3, 1), dtype=np.float32)
+    r_data = np.zeros((1, 3, 1), dtype=np.float32)
+    b_data = np.zeros((1, 6), dtype=np.float32)
+    w_data[0, 2, 0] = 1.0
+    r_data[0, 2, 0] = 1.0
+    b_data[0, 0] = -100.0  # force z gate ~0 to expose candidate branch
+    b_data[0, 5] = 1.0     # recurrent h bias, affects linear_before_reset path
+    h0 = np.array([[[1.0]]], dtype=np.float32)
+    seq_lens = np.array([2], dtype=np.int32)
+    w = numpy_helper.from_array(w_data, name='W')
+    r = numpy_helper.from_array(r_data, name='R')
+    b = numpy_helper.from_array(b_data, name='B')
+    init_h = numpy_helper.from_array(h0, name='initial_h')
+    seq = numpy_helper.from_array(seq_lens, name='seq_lens')
+    node = helper.make_node(
+        'GRU',
+        inputs=['input', 'W', 'R', 'B', 'seq_lens', 'initial_h'],
+        outputs=['output'],
+        direction='reverse',
+        hidden_size=1,
+        linear_before_reset=1,
+    )
+    graph = helper.make_graph([node], 'gru_reverse_lbr1_test', [x], [y], [w, r, b, seq, init_h])
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid('', 13)])
+    onnx.save(model, path)
+
+
+def _build_lstm_reverse_peephole_model(path: str) -> None:
+    x = helper.make_tensor_value_info('input', TensorProto.FLOAT, [4, 1, 1])
+    y = helper.make_tensor_value_info('output', TensorProto.FLOAT, [4, 1, 1, 1])
+    w_data = np.zeros((1, 4, 1), dtype=np.float32)
+    r_data = np.zeros((1, 4, 1), dtype=np.float32)
+    b_data = np.zeros((1, 8), dtype=np.float32)
+    h0_data = np.zeros((1, 1, 1), dtype=np.float32)
+    c0_data = np.ones((1, 1, 1), dtype=np.float32)
+    p_data = np.array([[0.2, 0.3, 0.4]], dtype=np.float32)  # [i, o, f]
+    seq_lens = np.array([2], dtype=np.int32)
+    w_data[0, 3, 0] = 1.0  # candidate gate from input
+    w = numpy_helper.from_array(w_data, name='W')
+    r = numpy_helper.from_array(r_data, name='R')
+    b = numpy_helper.from_array(b_data, name='B')
+    h0 = numpy_helper.from_array(h0_data, name='initial_h')
+    c0 = numpy_helper.from_array(c0_data, name='initial_c')
+    p = numpy_helper.from_array(p_data, name='P')
+    seq = numpy_helper.from_array(seq_lens, name='seq_lens')
+    node = helper.make_node(
+        'LSTM',
+        inputs=['input', 'W', 'R', 'B', 'seq_lens', 'initial_h', 'initial_c', 'P'],
+        outputs=['output'],
+        direction='reverse',
+        hidden_size=1,
+    )
+    graph = helper.make_graph([node], 'lstm_reverse_peephole_test', [x], [y], [w, r, b, seq, h0, c0, p])
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid('', 13)])
+    onnx.save(model, path)
+
+
+def _build_rnn_relu_clip_model(path: str) -> None:
+    x = helper.make_tensor_value_info('input', TensorProto.FLOAT, [4, 1, 1])
+    y = helper.make_tensor_value_info('output', TensorProto.FLOAT, [4, 1, 1, 1])
+    w = numpy_helper.from_array(np.array([[[1.0]]], dtype=np.float32), name='W')
+    r = numpy_helper.from_array(np.array([[[0.25]]], dtype=np.float32), name='R')
+    b = numpy_helper.from_array(np.array([[0.0, 0.0]], dtype=np.float32), name='B')
+    node = helper.make_node(
+        'RNN',
+        inputs=['input', 'W', 'R', 'B'],
+        outputs=['output'],
+        activations=['Relu'],
+        clip=0.5,
+        hidden_size=1,
+    )
+    graph = helper.make_graph([node], 'rnn_relu_clip_test', [x], [y], [w, r, b])
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid('', 13)])
+    onnx.save(model, path)
+
+
+def _build_gru_hardsigmoid_relu_clip_model(path: str) -> None:
+    x = helper.make_tensor_value_info('input', TensorProto.FLOAT, [4, 1, 1])
+    y = helper.make_tensor_value_info('output', TensorProto.FLOAT, [4, 1, 1, 1])
+    w_data = np.zeros((1, 3, 1), dtype=np.float32)
+    r_data = np.zeros((1, 3, 1), dtype=np.float32)
+    b_data = np.zeros((1, 6), dtype=np.float32)
+    w_data[0, 2, 0] = 1.0
+    r_data[0, 2, 0] = 0.5
+    w = numpy_helper.from_array(w_data, name='W')
+    r = numpy_helper.from_array(r_data, name='R')
+    b = numpy_helper.from_array(b_data, name='B')
+    node = helper.make_node(
+        'GRU',
+        inputs=['input', 'W', 'R', 'B'],
+        outputs=['output'],
+        activations=['HardSigmoid', 'Relu'],
+        clip=0.5,
+        hidden_size=1,
+    )
+    graph = helper.make_graph([node], 'gru_hardsigmoid_relu_clip_test', [x], [y], [w, r, b])
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid('', 13)])
+    onnx.save(model, path)
+
+
+def _build_lstm_input_forget_model(path: str) -> None:
+    x = helper.make_tensor_value_info('input', TensorProto.FLOAT, [4, 1, 1])
+    y = helper.make_tensor_value_info('output', TensorProto.FLOAT, [4, 1, 1, 1])
+    w_data = np.zeros((1, 4, 1), dtype=np.float32)
+    r_data = np.zeros((1, 4, 1), dtype=np.float32)
+    b_data = np.zeros((1, 8), dtype=np.float32)
+    w_data[0, 3, 0] = 1.0
+    w = numpy_helper.from_array(w_data, name='W')
+    r = numpy_helper.from_array(r_data, name='R')
+    b = numpy_helper.from_array(b_data, name='B')
+    node = helper.make_node(
+        'LSTM',
+        inputs=['input', 'W', 'R', 'B'],
+        outputs=['output'],
+        activations=['HardSigmoid', 'Tanh', 'Relu'],
+        input_forget=1,
+        clip=0.5,
+        hidden_size=1,
+    )
+    graph = helper.make_graph([node], 'lstm_input_forget_test', [x], [y], [w, r, b])
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid('', 13)])
+    onnx.save(model, path)
+
+
+def _build_qdq_rnn_model(path: str, qdtype: int = TensorProto.INT8) -> None:
+    x = helper.make_tensor_value_info('input', TensorProto.FLOAT, [4, 1, 1])
+    y = helper.make_tensor_value_info('output', TensorProto.FLOAT, [4, 1, 1, 1])
+    w = numpy_helper.from_array(np.array([[[1.0]]], dtype=np.float32), name='W')
+    r = numpy_helper.from_array(np.array([[[0.5]]], dtype=np.float32), name='R')
+    b = numpy_helper.from_array(np.array([[0.0, 0.0]], dtype=np.float32), name='B')
+    scale, zero = _qdq_params(qdtype)
+
+    qx = helper.make_node('QuantizeLinear', inputs=['input', 'scale', 'zero'], outputs=['qx'])
+    rnn = helper.make_node('RNN', inputs=['qx', 'W', 'R', 'B'], outputs=['qy'], hidden_size=1)
+    dq = helper.make_node('DequantizeLinear', inputs=['qy', 'scale', 'zero'], outputs=['output'])
+
+    value_info = [
+        helper.make_tensor_value_info('qx', qdtype, [4, 1, 1]),
+        helper.make_tensor_value_info('qy', qdtype, [4, 1, 1, 1]),
+    ]
+    graph = helper.make_graph(
+        [qx, rnn, dq],
+        'qdq_rnn_test',
+        [x],
+        [y],
+        [w, r, b, scale, zero],
+        value_info=value_info,
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid('', 13)])
+    onnx.save(model, path)
+
+
+def _build_qdq_gru_model(path: str, qdtype: int = TensorProto.INT8) -> None:
+    x = helper.make_tensor_value_info('input', TensorProto.FLOAT, [4, 1, 1])
+    y = helper.make_tensor_value_info('output', TensorProto.FLOAT, [4, 1, 1, 1])
+    w_data = np.zeros((1, 3, 1), dtype=np.float32)
+    r_data = np.zeros((1, 3, 1), dtype=np.float32)
+    b_data = np.zeros((1, 6), dtype=np.float32)
+    w_data[0, 2, 0] = 1.0
+    r_data[0, 2, 0] = 0.5
+    w = numpy_helper.from_array(w_data, name='W')
+    r = numpy_helper.from_array(r_data, name='R')
+    b = numpy_helper.from_array(b_data, name='B')
+    scale, zero = _qdq_params(qdtype)
+
+    qx = helper.make_node('QuantizeLinear', inputs=['input', 'scale', 'zero'], outputs=['qx'])
+    gru = helper.make_node('GRU', inputs=['qx', 'W', 'R', 'B'], outputs=['qy'], hidden_size=1)
+    dq = helper.make_node('DequantizeLinear', inputs=['qy', 'scale', 'zero'], outputs=['output'])
+
+    value_info = [
+        helper.make_tensor_value_info('qx', qdtype, [4, 1, 1]),
+        helper.make_tensor_value_info('qy', qdtype, [4, 1, 1, 1]),
+    ]
+    graph = helper.make_graph(
+        [qx, gru, dq],
+        'qdq_gru_test',
+        [x],
+        [y],
+        [w, r, b, scale, zero],
+        value_info=value_info,
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid('', 13)])
+    onnx.save(model, path)
+
+
+def _build_qdq_lstm_model(path: str, qdtype: int = TensorProto.INT8) -> None:
+    x = helper.make_tensor_value_info('input', TensorProto.FLOAT, [4, 1, 1])
+    y = helper.make_tensor_value_info('output', TensorProto.FLOAT, [4, 1, 1, 1])
+    w_data = np.zeros((1, 4, 1), dtype=np.float32)
+    r_data = np.zeros((1, 4, 1), dtype=np.float32)
+    b_data = np.zeros((1, 8), dtype=np.float32)
+    w_data[0, 3, 0] = 1.0
+    w = numpy_helper.from_array(w_data, name='W')
+    r = numpy_helper.from_array(r_data, name='R')
+    b = numpy_helper.from_array(b_data, name='B')
+    scale, zero = _qdq_params(qdtype)
+
+    qx = helper.make_node('QuantizeLinear', inputs=['input', 'scale', 'zero'], outputs=['qx'])
+    lstm = helper.make_node('LSTM', inputs=['qx', 'W', 'R', 'B'], outputs=['qy'], hidden_size=1)
+    dq = helper.make_node('DequantizeLinear', inputs=['qy', 'scale', 'zero'], outputs=['output'])
+
+    value_info = [
+        helper.make_tensor_value_info('qx', qdtype, [4, 1, 1]),
+        helper.make_tensor_value_info('qy', qdtype, [4, 1, 1, 1]),
+    ]
+    graph = helper.make_graph(
+        [qx, lstm, dq],
+        'qdq_lstm_test',
+        [x],
+        [y],
+        [w, r, b, scale, zero],
+        value_info=value_info,
     )
     model = helper.make_model(graph, opset_imports=[helper.make_operatorsetid('', 13)])
     onnx.save(model, path)
@@ -3125,6 +3450,34 @@ class TestTinyMlProject(unittest.TestCase):
                     msg=f"unexpected reference engine: {validation.engine}",
                 )
 
+    def _assert_quant_recurrent_codegen_and_run(
+        self,
+        model_path: str,
+        result: dict[str, object],
+        *,
+        qdtype: int,
+    ) -> None:
+        model = load_onnx_model(model_path)
+        source = Path(result['source']).read_text(encoding='utf-8')
+        if qdtype == TensorProto.INT8:
+            self.assertIn('int8_t', source)
+        elif qdtype == TensorProto.INT16:
+            self.assertIn('int16_t', source)
+        else:
+            raise ValueError('Unsupported qdtype for recurrent test.')
+        in_data = np.array([[[0.1]], [[0.2]], [[0.3]], [[0.4]]], dtype=np.float32)
+        py_out = _eval_model(model, {'input': in_data})[model.outputs[0].name]
+        c_run = run_generated_c_model(
+            model,
+            str(result['source']),
+            str(result['header']),
+            {'input': in_data},
+        )
+        self.assertTrue(c_run.ok, msg=c_run.reason)
+        assert c_run.outputs is not None
+        c_out = c_run.outputs[model.outputs[0].name]
+        np.testing.assert_allclose(c_out, py_out, rtol=1e-4, atol=1e-4)
+
     def test_generate_tinyml_project(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             model_path = os.path.join(td, 'model.onnx')
@@ -3690,7 +4043,7 @@ class TestTinyMlProject(unittest.TestCase):
             source = Path(result['source']).read_text(encoding='utf-8')
             manifest = Path(result['manifest']).read_text(encoding='utf-8')
             self.assertIn('MeanVarianceNormalization', manifest)
-            self.assertIn('inv_std = 1.0f / sqrtf', source)
+            self.assertIn('/ sqrtf(', source)
 
     def test_lppool_model(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -4032,7 +4385,7 @@ class TestTinyMlProject(unittest.TestCase):
             )
             source = Path(result['source']).read_text(encoding='utf-8')
             self.assertIn('Gather', Path(result['manifest']).read_text(encoding='utf-8'))
-            self.assertIn('k2c_gather_idx', source)
+            self.assertIn('idx_v', source)
 
     def test_gathernd_model(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -4365,7 +4718,7 @@ class TestTinyMlProject(unittest.TestCase):
             source = Path(result['source']).read_text(encoding='utf-8')
             manifest = Path(result['manifest']).read_text(encoding='utf-8')
             self.assertIn('Pad', manifest)
-            self.assertIn('in_coord_4', source)
+            self.assertIn('k2c_pad_in_dims', source)
 
     def test_slice_model(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -4394,7 +4747,7 @@ class TestTinyMlProject(unittest.TestCase):
             source = Path(result['source']).read_text(encoding='utf-8')
             manifest = Path(result['manifest']).read_text(encoding='utf-8')
             self.assertIn('Slice', manifest)
-            self.assertIn('coord_4', source)
+            self.assertIn('k2c_slice_step', source)
 
     def test_cumsum_model(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -4629,6 +4982,235 @@ class TestTinyMlProject(unittest.TestCase):
             manifest = Path(result['manifest']).read_text(encoding='utf-8')
             self.assertIn('QLinearMatMul', manifest)
             self.assertIn('real_v', source)
+
+    def test_matmul_integer_batched_model(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            model_path = os.path.join(td, 'matmul_integer_batched.onnx')
+            _build_matmul_integer_batched_model(model_path)
+            out_root = os.path.join(td, 'onnx-for-mcu')
+            result = generate_tinyml_project(
+                model_path,
+                out_root,
+                weights='flash',
+                emit='c',
+            )
+            source = Path(result['source']).read_text(encoding='utf-8')
+            manifest = Path(result['manifest']).read_text(encoding='utf-8')
+            self.assertIn('MatMulInteger', manifest)
+            self.assertIn('k2c_mmi_batch_dims', source)
+            self._assert_model_consistency_regression(model_path, result)
+
+    def test_qlinear_matmul_batched_model(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            model_path = os.path.join(td, 'qlinear_matmul_batched.onnx')
+            _build_qlinear_matmul_batched_model(model_path)
+            out_root = os.path.join(td, 'onnx-for-mcu')
+            result = generate_tinyml_project(
+                model_path,
+                out_root,
+                weights='flash',
+                emit='c',
+            )
+            source = Path(result['source']).read_text(encoding='utf-8')
+            manifest = Path(result['manifest']).read_text(encoding='utf-8')
+            self.assertIn('QLinearMatMul', manifest)
+            self.assertIn('k2c_qmm_batch_dims', source)
+            self._assert_model_consistency_regression(model_path, result, int8_atol=2.0)
+
+    def test_rnn_reverse_sequence_lens_model(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            model_path = os.path.join(td, 'rnn_reverse_seq.onnx')
+            _build_rnn_reverse_seq_model(model_path)
+            out_root = os.path.join(td, 'onnx-for-mcu')
+            result = generate_tinyml_project(
+                model_path,
+                out_root,
+                weights='flash',
+                emit='c',
+            )
+            source = Path(result['source']).read_text(encoding='utf-8')
+            manifest = Path(result['manifest']).read_text(encoding='utf-8')
+            self.assertIn('RNN', manifest)
+            self.assertIn('seq_len', source)
+            self._assert_model_consistency_regression(model_path, result)
+
+    def test_rnn_bidirectional_model(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            model_path = os.path.join(td, 'rnn_bidirectional.onnx')
+            _build_rnn_bidirectional_model(model_path)
+            out_root = os.path.join(td, 'onnx-for-mcu')
+            result = generate_tinyml_project(
+                model_path,
+                out_root,
+                weights='flash',
+                emit='c',
+            )
+            source = Path(result['source']).read_text(encoding='utf-8')
+            manifest = Path(result['manifest']).read_text(encoding='utf-8')
+            self.assertIn('RNN', manifest)
+            self.assertIn('dir_rev', source)
+            self._assert_model_consistency_regression(model_path, result)
+
+    def test_gru_reverse_lbr1_model(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            model_path = os.path.join(td, 'gru_reverse_lbr1.onnx')
+            _build_gru_reverse_lbr1_model(model_path)
+            out_root = os.path.join(td, 'onnx-for-mcu')
+            result = generate_tinyml_project(
+                model_path,
+                out_root,
+                weights='flash',
+                emit='c',
+            )
+            source = Path(result['source']).read_text(encoding='utf-8')
+            manifest = Path(result['manifest']).read_text(encoding='utf-8')
+            self.assertIn('GRU', manifest)
+            self.assertIn('rec_sum', source)
+            self._assert_model_consistency_regression(model_path, result)
+
+    def test_lstm_reverse_peephole_model(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            model_path = os.path.join(td, 'lstm_reverse_peephole.onnx')
+            _build_lstm_reverse_peephole_model(model_path)
+            out_root = os.path.join(td, 'onnx-for-mcu')
+            result = generate_tinyml_project(
+                model_path,
+                out_root,
+                weights='flash',
+                emit='c',
+            )
+            source = Path(result['source']).read_text(encoding='utf-8')
+            manifest = Path(result['manifest']).read_text(encoding='utf-8')
+            self.assertIn('LSTM', manifest)
+            self.assertIn('c_prev', source)
+            self._assert_model_consistency_regression(model_path, result)
+
+    def test_rnn_relu_clip_model(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            model_path = os.path.join(td, 'rnn_relu_clip.onnx')
+            _build_rnn_relu_clip_model(model_path)
+            out_root = os.path.join(td, 'onnx-for-mcu')
+            result = generate_tinyml_project(
+                model_path,
+                out_root,
+                weights='flash',
+                emit='c',
+            )
+            source = Path(result['source']).read_text(encoding='utf-8')
+            manifest = Path(result['manifest']).read_text(encoding='utf-8')
+            self.assertIn('RNN', manifest)
+            self.assertIn('k2c_rnn_clip', source)
+            self._assert_model_consistency_regression(model_path, result)
+
+    def test_gru_hardsigmoid_relu_clip_model(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            model_path = os.path.join(td, 'gru_hardsigmoid_relu_clip.onnx')
+            _build_gru_hardsigmoid_relu_clip_model(model_path)
+            out_root = os.path.join(td, 'onnx-for-mcu')
+            result = generate_tinyml_project(
+                model_path,
+                out_root,
+                weights='flash',
+                emit='c',
+            )
+            source = Path(result['source']).read_text(encoding='utf-8')
+            manifest = Path(result['manifest']).read_text(encoding='utf-8')
+            self.assertIn('GRU', manifest)
+            self.assertIn('k2c_gru_clip', source)
+            self._assert_model_consistency_regression(model_path, result)
+
+    def test_lstm_input_forget_model(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            model_path = os.path.join(td, 'lstm_input_forget.onnx')
+            _build_lstm_input_forget_model(model_path)
+            out_root = os.path.join(td, 'onnx-for-mcu')
+            result = generate_tinyml_project(
+                model_path,
+                out_root,
+                weights='flash',
+                emit='c',
+            )
+            source = Path(result['source']).read_text(encoding='utf-8')
+            manifest = Path(result['manifest']).read_text(encoding='utf-8')
+            self.assertIn('LSTM', manifest)
+            self.assertIn('1.0f - i_gate', source)
+            self.assertIn('k2c_lstm_clip', source)
+            self._assert_model_consistency_regression(model_path, result)
+
+    def test_quant_recurrent_rnn(self) -> None:
+        cases = (
+            (TensorProto.INT8, 'qdq_rnn_int8.onnx'),
+            (TensorProto.INT16, 'qdq_rnn_int16.onnx'),
+        )
+        for qdtype, filename in cases:
+            with self.subTest(qdtype=qdtype):
+                with tempfile.TemporaryDirectory() as td:
+                    model_path = os.path.join(td, filename)
+                    _build_qdq_rnn_model(model_path, qdtype)
+                    out_root = os.path.join(td, 'onnx-for-mcu')
+                    result = generate_tinyml_project(
+                        model_path,
+                        out_root,
+                        weights='flash',
+                        emit='c',
+                    )
+                    manifest = Path(result['manifest']).read_text(encoding='utf-8')
+                    self.assertIn('RNN', manifest)
+                    self._assert_quant_recurrent_codegen_and_run(
+                        model_path,
+                        result,
+                        qdtype=qdtype,
+                    )
+
+    def test_quant_recurrent_gru(self) -> None:
+        cases = (
+            (TensorProto.INT8, 'qdq_gru_int8.onnx'),
+            (TensorProto.INT16, 'qdq_gru_int16.onnx'),
+        )
+        for qdtype, filename in cases:
+            with self.subTest(qdtype=qdtype):
+                with tempfile.TemporaryDirectory() as td:
+                    model_path = os.path.join(td, filename)
+                    _build_qdq_gru_model(model_path, qdtype)
+                    out_root = os.path.join(td, 'onnx-for-mcu')
+                    result = generate_tinyml_project(
+                        model_path,
+                        out_root,
+                        weights='flash',
+                        emit='c',
+                    )
+                    manifest = Path(result['manifest']).read_text(encoding='utf-8')
+                    self.assertIn('GRU', manifest)
+                    self._assert_quant_recurrent_codegen_and_run(
+                        model_path,
+                        result,
+                        qdtype=qdtype,
+                    )
+
+    def test_quant_recurrent_lstm(self) -> None:
+        cases = (
+            (TensorProto.INT8, 'qdq_lstm_int8.onnx'),
+            (TensorProto.INT16, 'qdq_lstm_int16.onnx'),
+        )
+        for qdtype, filename in cases:
+            with self.subTest(qdtype=qdtype):
+                with tempfile.TemporaryDirectory() as td:
+                    model_path = os.path.join(td, filename)
+                    _build_qdq_lstm_model(model_path, qdtype)
+                    out_root = os.path.join(td, 'onnx-for-mcu')
+                    result = generate_tinyml_project(
+                        model_path,
+                        out_root,
+                        weights='flash',
+                        emit='c',
+                    )
+                    manifest = Path(result['manifest']).read_text(encoding='utf-8')
+                    self.assertIn('LSTM', manifest)
+                    self._assert_quant_recurrent_codegen_and_run(
+                        model_path,
+                        result,
+                        qdtype=qdtype,
+                    )
 
     def test_conv_integer_model(self) -> None:
         with tempfile.TemporaryDirectory() as td:
