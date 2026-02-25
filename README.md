@@ -70,32 +70,30 @@ uv run --with onnx python scripts/generate_opset12_coverage.py
 
 ## OpenOCD 说明
 
-- 仅保留 `cmake/user/openocd.cfg` 作为实际生效配置，不再依赖 `k2c_debug.cmake`。
-- `openocd.cfg` 不使用 `BOARD`，由 `INTERFACE + TARGET + TRANSPORT` 组合配置。
-- `cmake --preset keil2cmake` 可覆盖：
+- 实际生效配置文件：`cmake/user/openocd.cfg`。
+- `openocd.cfg` 采用 `INTERFACE + TARGET + TRANSPORT` 组合配置，不使用 `BOARD`。
+- `cmake --preset keil2cmake` 支持覆盖：
   - `K2C_OPENOCD_PATH`
   - `K2C_OPENOCD_TARGET`
   - `K2C_OPENOCD_INTERFACE`
   - `K2C_OPENOCD_TRANSPORT`
-- `K2C_OPENOCD_TARGET` 与 `K2C_OPENOCD_INTERFACE` 会根据当前 Keil 工程自动给出默认值（可再覆盖）。
+- `K2C_OPENOCD_TARGET` 与 `K2C_OPENOCD_INTERFACE` 会根据 Keil 工程自动给出默认值（可覆盖）。
 - `.vscode/launch.json` 和 `.vscode/tasks.json` 统一引用 `cmake/user/openocd.cfg`。
 
 ## TinyML 说明
 
-- 当前仅保留 C 后端生成链路（移除 CMSIS-NN / ESP-NN 后端入口）。
-- 不再提供 `backend/quant` 输入参数；量化应在模型导出阶段完成。
-- 若模型中含 Q/DQ（`QuantizeLinear`/`DequantizeLinear`）节点，会按张量类型自动走 `int8/int16` 路径；否则默认 `fp32`。
-- MCU 侧主覆盖类型：`fp32/int8/int16`，内存布局按 4 字节对齐。
-- ONNX Opset12 当前覆盖：`162/162`（含约束子集；详见覆盖矩阵）。
-- 近期补充的量化路径包括：`RandomUniform*`、`RandomNormal*`、`Multinomial`、`NegativeLogLikelihoodLoss`、`SoftmaxCrossEntropyLoss`、`MaxRoiPool`（具体限制以覆盖矩阵为准）。
-- `RNN/GRU/LSTM` 当前仍为 `float32` 子集实现。
+- 后端生成链路：C 后端。
+- 量化策略：模型导出阶段完成；转换阶段依据 Q/DQ（`QuantizeLinear`/`DequantizeLinear`）与张量 dtype 自动匹配 `int8/int16` 路径；无 Q/DQ 时默认 `fp32`。
+- MCU 覆盖类型：`fp32/int8/int16`，内存布局按 4 字节对齐。
+- ONNX Opset12 覆盖：`162/162`（含约束子集，详见覆盖矩阵）。
+- `RNN/GRU/LSTM` 支持 `fp32/int8/int16`（限制项以覆盖矩阵为准）。
 - 转换阶段默认执行一致性校验（ONNX ReferenceEvaluator，默认 `rtol=1e-3`、`atol=1e-4`）。
 
-Windows 下如需执行“生成 C 后再比对”的一致性回归（当前会话注入 GCC）：
+Windows 下如需执行“生成 C 后再比对”的一致性回归：
 
 ```powershell
-$env:CC = "C:/Users/qwer/Downloads/winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64ucrt-13.0.0-r5/mingw64/bin/gcc.exe"
-$env:PATH = "C:/Users/qwer/Downloads/winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64ucrt-13.0.0-r5/mingw64/bin;$env:PATH"
+$env:CC = "C:/path/to/arm-gcc/bin/gcc.exe"
+$env:PATH = "C:/path/to/arm-gcc/bin;$env:PATH"
 uv run --with jinja2 --with onnx --with numpy --with onnxruntime python -m unittest tests.test_tinyml -v
 ```
 

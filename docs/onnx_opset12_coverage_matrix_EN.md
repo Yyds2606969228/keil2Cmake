@@ -1,7 +1,7 @@
 # ONNX Opset12 Coverage Matrix (C Backend)
 
-- 中文版本: `onnx_opset12_coverage_matrix.md`
-- Generated at (UTC): `2026-02-24 12:30:20Z`
+- Chinese version: `onnx_opset12_coverage_matrix.md`
+- Generated at (UTC): `2026-02-25 03:27:29Z`
 - Scope: `domain in ('', 'ai.onnx')` and `since_version <= 12`
 - Backend rule: C backend only
 - Default CLI: `--weights flash --emit c`
@@ -45,7 +45,7 @@
 | Tensor Shape & Layout | 34 | 34 | 0 | 0 | 21.0% |
 | Logic & Comparison | 9 | 9 | 0 | 0 | 5.6% |
 | Quantization & Integer | 8 | 8 | 0 | 0 | 4.9% |
-| Recurrent | 3 | 3 | 0 | 0 | 1.9% |
+| Recurrent Neural Network | 3 | 3 | 0 | 0 | 1.9% |
 | Vision & Detection | 3 | 0 | 3 | 0 | 1.9% |
 | Random & Sampling | 5 | 0 | 5 | 0 | 3.1% |
 | Sequence | 9 | 0 | 9 | 0 | 5.6% |
@@ -90,7 +90,7 @@
 - Constrained: _None_
 - Not Implemented: _None_
 
-#### Recurrent (3)
+#### Recurrent Neural Network (3)
 
 - Full: `GRU`, `LSTM`, `RNN`
 - Constrained: _None_
