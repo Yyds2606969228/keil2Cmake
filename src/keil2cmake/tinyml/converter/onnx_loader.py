@@ -6,10 +6,10 @@ import onnx
 from onnx import numpy_helper, shape_inference
 
 from .ir import ModelIR, NodeInfo, TensorInfo
+from .lowering import constant_tensor_from_attrs, lower_placeholder_ops
 from .onnx_loader_helpers import (
     _apply_qparams,
     _dtype_from_tensorproto,
-    _infer_constant_meta,
     _infer_shapes,
     _is_initializer,
     _propagate_qparams,
@@ -109,33 +109,27 @@ def load_onnx_model(path: str) -> ModelIR:
         )
         nodes.append(node_info)
         if node_info.op_type == "Constant" and node_info.outputs:
-            meta = _infer_constant_meta(node_info.attrs)
-            if meta is None:
-                continue
-            const_dtype, const_shape = meta
             out_name = node_info.outputs[0]
+            const_tensor = constant_tensor_from_attrs(out_name, node_info.attrs)
             existing = tensors.get(out_name)
-            if existing is None:
-                tensors[out_name] = TensorInfo(
-                    name=out_name,
-                    shape=const_shape,
-                    dtype=const_dtype,
-                    data=None,
-                )
+            if const_tensor is None:
                 continue
-            shape = existing.shape
-            if not _shape_known(shape):
-                shape = const_shape
-            dtype = existing.dtype if existing.dtype != "unknown" else const_dtype
+            if existing is None:
+                tensors[out_name] = const_tensor
+                continue
+            shape = existing.shape if _shape_known(existing.shape) else list(const_tensor.shape)
+            dtype = existing.dtype if existing.dtype != "unknown" else const_tensor.dtype
             tensors[out_name] = TensorInfo(
                 name=existing.name,
                 shape=shape,
                 dtype=dtype,
-                data=existing.data,
+                data=const_tensor.data,
                 qscale=existing.qscale,
                 qzero=existing.qzero,
             )
 
+    _infer_shapes(tensors, nodes)
+    nodes = lower_placeholder_ops(nodes, tensors)
     _apply_qparams(tensors, nodes)
     _infer_shapes(tensors, nodes)
     _propagate_qparams(tensors, nodes)
