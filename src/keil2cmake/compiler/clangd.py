@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 import os
 from pathlib import Path
@@ -20,7 +20,7 @@ def _infer_gcc_toolchain_root(armgcc_path: str) -> str:
 
     try:
         p = p.resolve()
-    except Exception:
+    except (OSError, RuntimeError):
         p = Path(os.path.abspath(str(p)))
 
     candidates = [p, p.parent, p.parent.parent]
@@ -28,7 +28,7 @@ def _infer_gcc_toolchain_root(armgcc_path: str) -> str:
         try:
             if (cand / 'lib' / 'gcc' / 'arm-none-eabi').is_dir():
                 return norm_path(str(cand))
-        except Exception:
+        except (OSError, RuntimeError):
             continue
 
     return norm_path(str(p))

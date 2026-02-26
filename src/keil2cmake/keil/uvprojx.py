@@ -1,9 +1,12 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 import xml.etree.ElementTree as ET
 import os
+import logging
 
 from ..i18n import t
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_bool(text: str | None) -> bool | None:
@@ -89,8 +92,8 @@ def _detect_debugger(root: ET.Element, uvprojx_path: str) -> str:
             inferred = _infer_debugger_from_text(f.read())
             if inferred:
                 return inferred
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.debug("Failed to scan uvprojx for debugger inference '%s': %s", uvprojx_path, exc)
 
     # Keil often stores user debug probe selection in sibling .uvoptx/.uvopt.
     stem, _ = os.path.splitext(uvprojx_path)
@@ -103,7 +106,8 @@ def _detect_debugger(root: ET.Element, uvprojx_path: str) -> str:
                 inferred = _infer_debugger_from_text(f.read())
                 if inferred:
                     return inferred
-        except OSError:
+        except OSError as exc:
+            logger.debug("Failed to scan sibling debug settings '%s': %s", opt_path, exc)
             continue
     return ''
 

@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / 'src'
@@ -611,16 +614,87 @@ class TestUvprojxAndCli(unittest.TestCase):
             finally:
                 os.chdir(cwd)
 
+    def test_cli_help_no_onnxruntime_warning(self) -> None:
+        cmd = [sys.executable, str(ROOT / 'scripts' / 'Keil2Cmake.py'), '--help']
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0)
+        self.assertNotIn('onnxruntime', (result.stderr or '').lower())
+
     def test_cli_onnx_parser_defaults(self) -> None:
         parser = build_onnx_parser()
         args = parser.parse_args(['--model', 'model.onnx'])
         self.assertEqual(args.weights, 'flash')
         self.assertEqual(args.emit, 'c')
+        self.assertTrue(args.strict_validation)
+        with self.assertRaises(SystemExit):
+            parser.parse_args(['--model', 'model.onnx', '--strict-validation'])
+        args_non_strict = parser.parse_args(['--model', 'model.onnx', '--no-strict-validation'])
+        self.assertFalse(args_non_strict.strict_validation)
         with self.assertRaises(SystemExit):
             parser.parse_args(['--model', 'model.onnx', '--backend', 'esp-nn'])
         with self.assertRaises(SystemExit):
             parser.parse_args(['--model', 'model.onnx', '--quant', 'int8'])
 
+
+class TestTinyMlStrictValidation(unittest.TestCase):
+    def _mock_codegen_result(self, project_dir: str) -> dict:
+        return {
+            'source': os.path.join(project_dir, 'model.c'),
+            'header': os.path.join(project_dir, 'model.h'),
+            'arena_bytes': 128,
+            'op_backends': [],
+            'backend_stats': {},
+            'fallback_stats': {},
+        }
+
+    def test_strict_validation_skipped_fails_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            model_path = os.path.join(td, 'demo.onnx')
+            Path(model_path).write_text('fake', encoding='utf-8')
+            from keil2cmake.tinyml.project import generate_tinyml_project
+
+            with (
+                patch('keil2cmake.tinyml.project.load_onnx_model', return_value=object()),
+                patch(
+                    'keil2cmake.tinyml.project.generate_c_code',
+                    return_value=self._mock_codegen_result(os.path.join(td, 'demo')),
+                ),
+                patch('keil2cmake.tinyml.project.generate_manifest', return_value=os.path.join(td, 'manifest.json')),
+                patch(
+                    'keil2cmake.tinyml.project.validate_model_consistency',
+                    return_value=SimpleNamespace(status='skipped', reason='reference backend unavailable'),
+                ),
+            ):
+                with self.assertRaises(ValueError):
+                    generate_tinyml_project(model_path, td, 'flash', 'c')
+
+    def test_non_strict_validation_allows_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            model_path = os.path.join(td, 'demo.onnx')
+            Path(model_path).write_text('fake', encoding='utf-8')
+            from keil2cmake.tinyml.project import generate_tinyml_project
+
+            with (
+                patch('keil2cmake.tinyml.project.load_onnx_model', return_value=object()),
+                patch(
+                    'keil2cmake.tinyml.project.generate_c_code',
+                    return_value=self._mock_codegen_result(os.path.join(td, 'demo')),
+                ),
+                patch('keil2cmake.tinyml.project.generate_manifest', return_value=os.path.join(td, 'manifest.json')),
+                patch(
+                    'keil2cmake.tinyml.project.validate_model_consistency',
+                    return_value=SimpleNamespace(status='skipped', reason='reference backend unavailable'),
+                ),
+            ):
+                result = generate_tinyml_project(
+                    model_path,
+                    td,
+                    'flash',
+                    'c',
+                    strict_validation=False,
+                )
+                self.assertEqual(result['validation'].status, 'skipped')
+                self.assertFalse(result['strict_validation'])
 
 class TestToolchains(unittest.TestCase):
     def test_generate_toolchains_with_sct(self) -> None:

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import warnings
+
 import onnx
 from onnx import numpy_helper, shape_inference
+from onnx.onnx_cpp2py_export.shape_inference import InferenceError as OnnxShapeInferenceError
 
 from .ir import ModelIR, NodeInfo, TensorInfo
 from .lowering import constant_tensor_from_attrs, lower_placeholder_ops
@@ -24,8 +27,12 @@ def load_onnx_model(path: str) -> ModelIR:
     model = onnx.load(path)
     try:
         model = shape_inference.infer_shapes(model)
-    except Exception:
-        pass
+    except (OnnxShapeInferenceError, RuntimeError, ValueError, TypeError) as exc:
+        warnings.warn(
+            f"ONNX shape inference skipped, continue with original graph: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     graph = model.graph
     opset = 0

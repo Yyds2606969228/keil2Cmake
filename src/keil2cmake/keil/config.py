@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 import configparser
 import os
@@ -9,6 +9,19 @@ from ..i18n import t
 from ..common import expand_path
 
 
+_DEFAULTS_PATHS = {
+    'ARMGCC_PATH': '',
+    'CMAKE_PATH': 'cmake',
+    'NINJA_PATH': 'ninja',
+    'CHECKCPP_PATH': 'checkcpp',
+    'OPENOCD_PATH': 'openocd',
+}
+
+_DEFAULTS_GENERAL = {
+    'LANGUAGE': 'zh',
+}
+
+
 def get_config_path() -> str:
     """配置文件路径（用户目录下）。"""
     override = os.environ.get('KEIL2CMAKE_CONFIG_PATH')
@@ -17,44 +30,37 @@ def get_config_path() -> str:
     return str(Path.home() / '.config' / 'keil2cmake' / 'path.cfg')
 
 
-def load_config() -> configparser.ConfigParser:
-    """加载配置文件（不存在则创建默认值）。"""
-    config = configparser.ConfigParser()
-    cfg_path = get_config_path()
-
-    defaults_paths = {
-        'ARMGCC_PATH': '',
-        'CMAKE_PATH': 'cmake',
-        'NINJA_PATH': 'ninja',
-        'CHECKCPP_PATH': 'checkcpp',
-        'OPENOCD_PATH': 'openocd',
-    }
-    defaults_general = {
-        'LANGUAGE': 'zh',
-    }
-
-    if os.path.exists(cfg_path):
-        config.read(cfg_path, encoding='utf-8')
-
+def _apply_defaults(config: configparser.ConfigParser) -> None:
     if 'PATHS' not in config:
         config['PATHS'] = {}
     if 'GENERAL' not in config:
         config['GENERAL'] = {}
 
-    for k, v in defaults_paths.items():
+    for k, v in _DEFAULTS_PATHS.items():
         config['PATHS'].setdefault(k, v)
-    for k, v in defaults_general.items():
+    for k, v in _DEFAULTS_GENERAL.items():
         config['GENERAL'].setdefault(k, v)
 
-    os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
-    with open(cfg_path, 'w', encoding='utf-8') as f:
-        config.write(f)
 
+def load_config() -> configparser.ConfigParser:
+    """加载配置文件（纯读取；不存在时仅返回内存默认值）。"""
+    config = configparser.ConfigParser()
+    cfg_path = get_config_path()
+
+    if os.path.exists(cfg_path):
+        config.read(cfg_path, encoding='utf-8')
+
+    _apply_defaults(config)
     return config
 
 
 def save_config(config: configparser.ConfigParser) -> None:
-    with open(get_config_path(), 'w', encoding='utf-8') as f:
+    _apply_defaults(config)
+    cfg_path = get_config_path()
+    cfg_dir = os.path.dirname(cfg_path)
+    if cfg_dir:
+        os.makedirs(cfg_dir, exist_ok=True)
+    with open(cfg_path, 'w', encoding='utf-8') as f:
         config.write(f)
 
 

@@ -27,7 +27,7 @@ def infer_sysroot_from_armgcc_path(armgcc_path: str) -> str:
 
     try:
         p = p.resolve()
-    except Exception:
+    except (OSError, RuntimeError):
         p = Path(os.path.abspath(str(p)))
 
     candidates = []
@@ -43,7 +43,7 @@ def infer_sysroot_from_armgcc_path(armgcc_path: str) -> str:
         try:
             if (cand / 'include').is_dir():
                 return str(cand)
-        except Exception:
+        except (OSError, RuntimeError):
             continue
     return ''
 
@@ -60,7 +60,7 @@ def infer_gcc_internal_includes_from_armgcc_path(armgcc_path: str) -> list[str]:
 
     try:
         p = p.resolve()
-    except Exception:
+    except (OSError, RuntimeError):
         p = Path(os.path.abspath(str(p)))
 
     toolchain_root = p

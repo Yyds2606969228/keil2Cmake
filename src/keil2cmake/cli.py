@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 import argparse
 import os
@@ -12,7 +12,6 @@ from .compiler.toolchains import generate_toolchains
 from .compiler.presets import generate_cmake_presets
 from .compiler.clangd import generate_clangd_config
 from .compiler.debug import generate_debug_templates, generate_openocd_files
-from .tinyml import generate_tinyml_project
 from .i18n import set_language, t
 
 
@@ -84,6 +83,13 @@ def build_onnx_parser() -> argparse.ArgumentParser:
         default='./onnx-for-mcu',
         help='Output root directory',
     )
+    parser.add_argument(
+        '--no-strict-validation',
+        dest='strict_validation',
+        action='store_false',
+        help='Allow generation when consistency validation is skipped.',
+    )
+    parser.set_defaults(strict_validation=True)
     return parser
 
 
@@ -168,6 +174,9 @@ def _main_onnx(argv) -> int:
     args = parser.parse_args(argv)
 
     set_language(get_language())
+    # Lazy import keeps non-TinyML commands/help free from heavy runtime deps.
+    from .tinyml import generate_tinyml_project
+
     if not os.path.exists(args.model):
         print(t('cli.error.file_not_found', path=args.model))
         return 1
@@ -177,6 +186,7 @@ def _main_onnx(argv) -> int:
         args.output,
         args.weights,
         args.emit,
+        strict_validation=args.strict_validation,
     )
 
     print('\n' + t('cli.onnx.done'))

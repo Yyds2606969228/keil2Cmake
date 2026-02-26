@@ -50,7 +50,7 @@ def remove_bom_from_file(file_path: str) -> bool:
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(content)
             return True
-    except Exception:
-        pass
-    
+    except (OSError, UnicodeError):
+        return False
+
     return False

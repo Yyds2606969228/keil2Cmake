@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 from __future__ import annotations
 
@@ -220,5 +220,5 @@ def t(key: str, **kwargs: Any) -> str:
     template = table.get(key) or _MESSAGES["zh"].get(key) or key
     try:
         return template.format(**kwargs)
-    except Exception:
+    except (KeyError, IndexError, ValueError, TypeError):
         return template

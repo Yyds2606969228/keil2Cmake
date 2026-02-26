@@ -5,15 +5,43 @@ from __future__ import annotations
 import numpy as np
 import onnx
 
+_OPTIONAL_IMPORT_ERRORS = (ImportError, OSError)
+_BASE_REFERENCE_EXEC_ERRORS = (OSError, RuntimeError, ValueError, TypeError, NotImplementedError)
+_ORT_EXEC_ERRORS: tuple[type[BaseException], ...] = ()
+
 try:
     import onnxruntime as ort
-except Exception:  # pragma: no cover - optional dependency
+except _OPTIONAL_IMPORT_ERRORS:  # pragma: no cover - optional dependency
     ort = None
+else:
+    try:
+        from onnxruntime.capi import onnxruntime_pybind11_state as ort_state
+    except _OPTIONAL_IMPORT_ERRORS:
+        ort_state = None
+    if ort_state is not None:
+        _ORT_EXEC_ERRORS = tuple(
+            cls for cls in (
+                getattr(ort_state, "EPFail", None),
+                getattr(ort_state, "EngineError", None),
+                getattr(ort_state, "Fail", None),
+                getattr(ort_state, "InvalidArgument", None),
+                getattr(ort_state, "InvalidGraph", None),
+                getattr(ort_state, "InvalidProtobuf", None),
+                getattr(ort_state, "ModelLoaded", None),
+                getattr(ort_state, "NoModel", None),
+                getattr(ort_state, "NoSuchFile", None),
+                getattr(ort_state, "NotImplemented", None),
+                getattr(ort_state, "RuntimeException", None),
+            )
+            if isinstance(cls, type) and issubclass(cls, Exception)
+        )
 
 try:
     from onnx.reference import ReferenceEvaluator
-except Exception:  # pragma: no cover - optional fallback
+except _OPTIONAL_IMPORT_ERRORS:  # pragma: no cover - optional fallback
     ReferenceEvaluator = None
+
+_REFERENCE_EXEC_ERRORS = _BASE_REFERENCE_EXEC_ERRORS + _ORT_EXEC_ERRORS
 
 
 def has_reference_backend() -> bool:
@@ -55,7 +83,7 @@ def run_reference_output(
             if mapped is None:
                 return None, reason
             return mapped, ""
-        except Exception as compat_exc:
+        except _REFERENCE_EXEC_ERRORS as compat_exc:
             return None, f"ir-compat retry failed: {compat_exc}"
 
     ort_reason = ""
@@ -71,7 +99,7 @@ def run_reference_output(
             if mapped is None:
                 return None, "onnxruntime", reason
             return mapped, "onnxruntime", ""
-        except Exception as exc:
+        except _REFERENCE_EXEC_ERRORS as exc:
             ort_reason = f"onnxruntime error: {exc}"
             msg = str(exc).lower()
             if "unsupported model ir version" in msg or "max supported ir version" in msg:
@@ -100,7 +128,7 @@ def run_reference_output(
                 mapped = {name: np.array(val) for name, val in zip(names, outputs)}
                 return mapped, "onnx.reference", ""
             return None, "onnx.reference", "reference output missing"
-        except Exception as exc:
+        except _REFERENCE_EXEC_ERRORS as exc:
             if ort_reason:
                 return None, "onnx.reference", f"{ort_reason}; reference eval error: {exc}"
             return None, "onnx.reference", f"reference eval error: {exc}"

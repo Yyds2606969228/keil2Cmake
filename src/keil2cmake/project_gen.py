@@ -1,13 +1,16 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 import os
 import re
+import logging
 
 from .common import ensure_dir, norm_path
 from .keil.device import detect_cpu_architecture
 from .keil.config import get_cmake_min_version
 from .i18n import t
 from .template_engine import write_template
+
+logger = logging.getLogger(__name__)
 
 
 def _relativize_paths(paths: list[str], project_root: str, uvprojx_dir: str | None) -> list[str]:
@@ -28,7 +31,8 @@ def _relativize_paths(paths: list[str], project_root: str, uvprojx_dir: str | No
         try:
             rel = os.path.relpath(abs_path, project_root)
             out.append(norm_path(rel))
-        except Exception:
+        except ValueError:
+            # relpath can fail on Windows when paths are on different drives.
             out.append(norm_path(abs_path))
     return out
 
@@ -51,7 +55,8 @@ def _is_gas_source(path: str) -> bool:
                     continue
                 if _GAS_PATTERN.search(line):
                     return True
-    except OSError:
+    except OSError as exc:
+        logger.debug("Failed to inspect ASM syntax in '%s': %s", path, exc)
         return False
     return False
 
@@ -104,8 +109,8 @@ def _find_gcc_startup_candidate(uvprojx_dir: str, device_name: str) -> str:
                             score += 2
                         if 'Reset_Handler' in content:
                             score += 2
-                except OSError:
-                    pass
+                except OSError as exc:
+                    logger.debug("Failed to inspect startup candidate '%s': %s", path, exc)
 
                 if score > best_score:
                     best_score = score
@@ -261,8 +266,8 @@ def clean_generated(project_root: str) -> int:
             try:
                 os.remove(path)
                 removed += 1
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.debug("Failed to remove generated file '%s': %s", path, exc)
 
     vscode_dir = os.path.join(project_root, '.vscode')
     for name in ('launch.json', 'tasks.json'):
@@ -271,14 +276,14 @@ def clean_generated(project_root: str) -> int:
             try:
                 os.remove(path)
                 removed += 1
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.debug("Failed to remove generated file '%s': %s", path, exc)
 
     cmake_dir = os.path.join(project_root, 'cmake')
     internal_dir = os.path.join(cmake_dir, 'internal')
     user_dir = os.path.join(cmake_dir, 'user')
 
-    known = [
+    generated_paths = [
         os.path.join(internal_dir, 'toolchain.cmake'),
         os.path.join(internal_dir, 'k2c_debug.cmake'),
         os.path.join(internal_dir, 'keil2cmake_default.sct'),
@@ -288,64 +293,29 @@ def clean_generated(project_root: str) -> int:
         os.path.join(internal_dir, 'templates', 'launch.json.in'),
         os.path.join(internal_dir, 'templates', 'tasks.json.in'),
 
-        # Legacy internal layout (older generator versions)
-        os.path.join(internal_dir, 'armcc', 'toolchain.cmake'),
-        os.path.join(internal_dir, 'armclang', 'toolchain.cmake'),
-        os.path.join(internal_dir, 'armgcc', 'toolchain.cmake'),
-        os.path.join(internal_dir, 'keil2cmake_generated.cmake'),
-        os.path.join(internal_dir, 'common', 'keil2cmake_generated.cmake'),
-
         os.path.join(user_dir, 'keil2cmake_user.cmake'),
         os.path.join(user_dir, 'cppcheck.cmake'),
         os.path.join(user_dir, 'openocd.cfg'),
 
         os.path.join(user_dir, 'common', 'keil2cmake_project.cmake'),
         os.path.join(user_dir, 'common', 'keil2cmake_user.cmake'),
-
-        # Legacy user layout (older generator versions)
-        os.path.join(user_dir, 'common', 'Template.sct'),
-        os.path.join(user_dir, 'common', 'Template.ld'),
-        # Legacy user root file (older generator versions)
-        os.path.join(user_dir, 'keil2cmake_user.cmake'),
-        os.path.join(user_dir, 'armcc', 'keil2cmake_user.cmake'),
-        os.path.join(user_dir, 'armclang', 'keil2cmake_user.cmake'),
-        os.path.join(user_dir, 'armgcc', 'keil2cmake_user.cmake'),
-        os.path.join(user_dir, 'armcc', 'Template.sct'),
-        os.path.join(user_dir, 'armclang', 'Template.sct'),
-        os.path.join(user_dir, 'armgcc', 'Template.ld'),
     ]
+
+    known = generated_paths
     for path in known:
         if os.path.isfile(path):
             try:
                 os.remove(path)
                 removed += 1
-            except OSError:
-                pass
-
-    # Best-effort: remove old internal subdirs if empty (from older generator versions)
-    for sub in ('armcc', 'armclang', 'armgcc', 'common'):
-        d = os.path.join(internal_dir, sub)
-        try:
-            if os.path.isdir(d) and not os.listdir(d):
-                os.rmdir(d)
-        except OSError:
-            pass
-
-    # Best-effort: remove old user subdirs if empty (from older generator versions)
-    for sub in ('armcc', 'armclang', 'armgcc', 'common'):
-        d = os.path.join(user_dir, sub)
-        try:
-            if os.path.isdir(d) and not os.listdir(d):
-                os.rmdir(d)
-        except OSError:
-            pass
+            except OSError as exc:
+                logger.debug("Failed to remove generated file '%s': %s", path, exc)
 
     templates_dir = os.path.join(internal_dir, 'templates')
     try:
         if os.path.isdir(templates_dir) and not os.listdir(templates_dir):
             os.rmdir(templates_dir)
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.debug("Failed to remove empty templates dir '%s': %s", templates_dir, exc)
 
     if removed:
         print(t('clean.done', count=removed))

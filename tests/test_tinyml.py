@@ -16,11 +16,17 @@ SRC = ROOT / 'src'
 import sys
 sys.path.insert(0, str(SRC))
 
-from keil2cmake.tinyml.project import generate_tinyml_project
+from keil2cmake.tinyml.project import generate_tinyml_project as _generate_tinyml_project
 from keil2cmake.tinyml.converter import load_onnx_model
 from keil2cmake.tinyml.runtime import validate_model_consistency
 from keil2cmake.tinyml.runtime.c_runner import run_generated_c_model
 from keil2cmake.tinyml.runtime.validator import _eval_model
+
+
+def generate_tinyml_project(*args, **kwargs):
+    # Keep default test behavior stable: strict validation is covered in dedicated tests.
+    kwargs.setdefault('strict_validation', False)
+    return _generate_tinyml_project(*args, **kwargs)
 
 
 def _build_simple_gemm_model(path: str) -> None:

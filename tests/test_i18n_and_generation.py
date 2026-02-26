@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 import os
 import sys
@@ -42,6 +42,10 @@ class TestConfigPaths(unittest.TestCase):
             self.assertEqual(cfg['PATHS'].get('NINJA_PATH', ''), 'ninja')
             self.assertEqual(cfg['PATHS'].get('CHECKCPP_PATH', ''), 'checkcpp')
             self.assertEqual(cfg['PATHS'].get('OPENOCD_PATH', ''), 'openocd')
+            self.assertFalse(os.path.exists(cfg_path))
+
+            kcfg.save_config(cfg)
+            self.assertTrue(os.path.exists(cfg_path))
 
 
 class TestUvprojxAndGeneration(unittest.TestCase):

@@ -776,7 +776,7 @@ def _infer_constant_meta(attrs: dict) -> tuple[str, list[int]] | None:
         dtype = _dtype_from_tensorproto(int(value.data_type))
         try:
             arr = numpy_helper.to_array(value)
-        except Exception:
+        except (TypeError, ValueError, RuntimeError):
             return None
         if dtype == "unknown":
             if str(arr.dtype) == "bool":

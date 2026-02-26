@@ -70,7 +70,7 @@ def run_prediction_outputs(
 
     try:
         pred_tensors = eval_model(model, input_data)
-    except Exception as exc:
+    except (RuntimeError, ValueError, TypeError, KeyError, IndexError) as exc:
         return None, "python-eval", f"predict eval error: {exc}"
 
     pred_outputs: dict[str, np.ndarray] = {}

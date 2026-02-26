@@ -138,7 +138,7 @@ def _safe_eval_expr(expr: str, macros: dict[str, str], _depth: int = 0, _stack: 
 
     try:
         return _eval(node)
-    except Exception:
+    except (ValueError, TypeError, ZeroDivisionError, OverflowError, RecursionError):
         return None
 
 

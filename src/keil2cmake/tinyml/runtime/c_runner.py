@@ -230,7 +230,7 @@ def run_generated_c_model(
         try:
             arr = np.asarray(feed_map[tensor.name], dtype=np_dtype)
             arr = arr.reshape(shape if shape else ())
-        except Exception as exc:
+        except (TypeError, ValueError) as exc:
             return CRunResult(ok=False, reason=f"input reshape failed for {tensor.name}: {exc}")
         prepared_inputs[tensor.name] = arr
 
@@ -273,7 +273,7 @@ def run_generated_c_model(
 
         try:
             comp = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
-        except Exception as exc:
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
             return CRunResult(ok=False, reason=f"compile error: {exc}")
         if comp.returncode != 0:
             detail = (comp.stderr or comp.stdout or "").strip().splitlines()
@@ -287,7 +287,7 @@ def run_generated_c_model(
                 text=True,
                 timeout=timeout_sec,
             )
-        except Exception as exc:
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
             return CRunResult(ok=False, reason=f"run error: {exc}")
         if run.returncode != 0:
             detail = (run.stderr or run.stdout or "").strip().splitlines()

@@ -1,4 +1,4 @@
-﻿# Keil2Cmake
+# Keil2Cmake
 
 **中文** | [English](README_EN.md)
 
@@ -60,6 +60,13 @@ Keil2Cmake openocd -mcu <MCU> -debugger <daplink|jlink|stlink> --overwrite
 Keil2Cmake onnx --model model.onnx --weights flash --emit c
 ```
 
+严格一致性校验（默认开启，可显式开关）：
+
+```bash
+Keil2Cmake onnx --model model.onnx
+Keil2Cmake onnx --model model.onnx --no-strict-validation
+```
+
 生成 Opset12 覆盖矩阵：
 
 ```bash
@@ -67,6 +74,13 @@ uv run --with onnx python scripts/generate_opset12_coverage.py
 ```
 
 输出：`docs/onnx_opset12_coverage_matrix.md`
+
+## 发布说明
+
+- 发布说明目录：`docs/releases/README.md`
+- 最新正式版本：`release/2.0.0`（2026-02-26）
+- 最新发布说明：`docs/releases/release-2.0/RELEASE_NOTES.md`
+- 升级指南：`docs/releases/release-2.0/UPGRADE_GUIDE.md`
 
 ## OpenOCD 说明
 
@@ -88,6 +102,7 @@ uv run --with onnx python scripts/generate_opset12_coverage.py
 - ONNX Opset12 覆盖：`162/162`（含约束子集，详见覆盖矩阵）。
 - `RNN/GRU/LSTM` 支持 `fp32/int8/int16`（限制项以覆盖矩阵为准）。
 - 转换阶段默认执行一致性校验（ONNX ReferenceEvaluator，默认 `rtol=1e-3`、`atol=1e-4`）。
+- 严格模式默认开启；若一致性校验被 `skipped` 也会直接失败（可通过 `--no-strict-validation` 放宽）。
 
 Windows 下如需执行“生成 C 后再比对”的一致性回归：
 

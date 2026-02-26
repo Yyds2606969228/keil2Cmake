@@ -22,7 +22,7 @@ def _tensor_info_from_proto(name: str, tensor_proto: onnx.TensorProto) -> Tensor
         return None
     try:
         arr = numpy_helper.to_array(tensor_proto)
-    except Exception:
+    except (TypeError, ValueError, RuntimeError):
         return None
     shape = list(arr.shape)
     if dtype == "float32":
@@ -233,7 +233,7 @@ class _Lowerer:
         try:
             dtype = _dtype_from_tensorproto(_tensor_dtype(value_info))
             shape = _shape_from_value(value_info)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             return
         if dtype == "unknown":
             return
