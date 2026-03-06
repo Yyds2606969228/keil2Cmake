@@ -1,0 +1,4 @@
+interface:
+  display_name: "Software Loop Orchestrator"
+  short_description: "Use for software-side closed-loop staging, routing, artifact consistency, and next-step orchestration."
+  default_prompt: "Use this skill when the task is not just one debugging action but a whole software-side loop: decide the current phase, ensure build and debug artifacts stay consistent, choose the correct downstream skill, and keep the workflow moving from generation to build, debug preparation, triage, analysis, and regression. Favor explicit stage transitions, artifact awareness, and structured handoff outputs."

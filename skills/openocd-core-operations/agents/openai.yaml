@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenOCD Core Operations"
+  short_description: "Use for safe session bring-up, target control, controlled writes, flashing, and recovery."
+  default_prompt: "Use this skill when the task is primarily about establishing or restoring debug control: connect the probe, halt or resume the target, inspect registers or memory, perform guarded write or flash operations, and leave the target in a known state. Prefer read-first actions, explicitly mark any high-risk step, and return a structured result with current_state, evidence, next_action, risk_or_limit, and raw_output."

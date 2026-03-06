@@ -222,11 +222,26 @@ def _main_onnx(argv) -> int:
     return 0
 
 
+def _main_mcp_debug(argv) -> int:
+    if argv:
+        print('mcp-debug does not accept extra arguments.')
+        return 2
+
+    # Lazy import keeps the default conversion and TinyML paths independent
+    # from the optional debug runtime dependencies.
+    from openocd_mcp.server import main as mcp_main
+
+    mcp_main()
+    return 0
+
+
 def main(argv=None) -> int:
     if argv is None:
         argv = sys.argv[1:]
     if argv and argv[0] == 'openocd':
         return _main_openocd(argv[1:])
+    if argv and argv[0] == 'mcp-debug':
+        return _main_mcp_debug(argv[1:])
     if argv and argv[0] == 'onnx':
         return _main_onnx(argv[1:])
     return _main_convert(argv)

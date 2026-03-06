@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 from pathlib import Path
 import unittest
+
+if importlib.util.find_spec('onnx') is None:
+    raise unittest.SkipTest('tinyml optional dependency onnx is missing')
 
 import onnx
 

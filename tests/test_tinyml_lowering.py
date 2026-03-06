@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import unittest
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+
+if importlib.util.find_spec('numpy') is None or importlib.util.find_spec('onnx') is None:
+    raise unittest.SkipTest('tinyml optional dependencies numpy/onnx are missing')
 
 import numpy as np
 import onnx

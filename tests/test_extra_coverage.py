@@ -647,7 +647,15 @@ class TestTinyMlStrictValidation(unittest.TestCase):
             'fallback_stats': {},
         }
 
+    def _require_tinyml_deps(self) -> None:
+        import importlib.util
+
+        missing = [name for name in ('onnx', 'numpy') if importlib.util.find_spec(name) is None]
+        if missing:
+            self.skipTest(f"tinyml optional dependencies are missing: {', '.join(missing)}")
+
     def test_strict_validation_skipped_fails_by_default(self) -> None:
+        self._require_tinyml_deps()
         with tempfile.TemporaryDirectory() as td:
             model_path = os.path.join(td, 'demo.onnx')
             Path(model_path).write_text('fake', encoding='utf-8')
@@ -669,6 +677,7 @@ class TestTinyMlStrictValidation(unittest.TestCase):
                     generate_tinyml_project(model_path, td, 'flash', 'c')
 
     def test_non_strict_validation_allows_skipped(self) -> None:
+        self._require_tinyml_deps()
         with tempfile.TemporaryDirectory() as td:
             model_path = os.path.join(td, 'demo.onnx')
             Path(model_path).write_text('fake', encoding='utf-8')

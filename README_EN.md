@@ -49,6 +49,28 @@ Keil2Cmake openocd -mcu STM32F103C8 -debugger jlink
 ```bash
 Keil2Cmake onnx --model model.onnx --weights flash --emit c
 ```
+
+### 6. Start the MCP debug runtime
+```bash
+Keil2Cmake mcp-debug
+```
+
+This command starts the integrated `openocd-mcp` runtime for upper-layer Agents or MCP clients.
+
+## EXE Distribution Recommendation
+
+For Windows distribution, the recommended layout is a **dual-entry** model:
+
+- `Keil2Cmake.exe`: primary entry for project generation, build, OpenOCD config, TinyML, and global direction orchestration
+- `openocd-mcp.exe`: service entry dedicated to `stdio` MCP clients such as Claude or Codex
+
+Recommended relationship:
+
+- `Keil2Cmake.exe` remains the main entry
+- `openocd-mcp.exe` only hosts MCP-facing debug/runtime capabilities
+- the global orchestrator remains in `keil2cmake.orchestrator`
+
+This keeps the orchestration brain in the main executable while leaving the MCP runtime as an on-demand service process.
 Strict consistency validation (enabled by default, configurable explicitly):
 ```bash
 Keil2Cmake onnx --model model.onnx
@@ -115,6 +137,7 @@ Keil2Cmake openocd -mcu <MCU> -debugger <daplink|jlink|stlink>
 - checkcpp args: configure `K2C_CHECKCPP_ENABLE` or switch-style `K2C_CHECKCPP_ENABLE_*` (ON/OFF) to build `--enable`, plus `K2C_CHECKCPP_JOBS` / `K2C_CHECKCPP_EXCLUDES` / `K2C_CHECKCPP_INCONCLUSIVE` in `cmake/user/cppcheck.cmake`.
 - OpenOCD debug: `.vscode/launch.json` (cortex-debug) and `.vscode/tasks.json` (download) both use `cmake/user/openocd.cfg`; running `cmake --preset keil2cmake` can override and regenerate debug files via `K2C_OPENOCD_PATH` / `K2C_OPENOCD_TARGET` / `K2C_OPENOCD_INTERFACE`.
 - Re-sync and overwrite OpenOCD files: `Keil2Cmake openocd -mcu <MCU> -debugger <daplink|jlink|stlink> --overwrite` updates `.vscode/launch.json`, `.vscode/tasks.json`, and `cmake/user/openocd.cfg`.
+- The direction orchestrator is compatible with dual-exe distribution: `Keil2Cmake.exe` remains the orchestrating entry, while `openocd-mcp.exe` is the MCP service endpoint.
 
 ---
 
