@@ -135,6 +135,8 @@ class OpenOCDClient:
         while not self._stop_event.is_set():
             try:
                 data = sock.recv(4096)
+            except socket.timeout:
+                continue
             except OSError:
                 break
             if not data:

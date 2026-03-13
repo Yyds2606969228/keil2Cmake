@@ -178,34 +178,41 @@ class OpenOCDMCPService:
                 self.session.update(flash_mode=bool(config["flash_mode"]))
             svd_path = config.get("svd_path")
             elf_path = config.get("elf_path")
-            if config.get("auto_start", True):
-                openocd_bin = config.get("openocd_bin") or resolve_openocd_binary() or "openocd"
-                openocd_config = OpenOCDConfig(
-                    adapter=config["adapter"],
-                    target=config["target"],
-                    transport=config.get("transport", "swd"),
-                    tcl_port=int(config.get("tcl_port", 6666)),
-                    telnet_port=int(config.get("telnet_port", 4444)),
-                    openocd_bin=openocd_bin,
-                    extra_args=list(config.get("extra_args", [])),
-                    port_scan_limit=int(config.get("port_scan_limit", 20)),
-                )
-                self.openocd.start(openocd_config)
-            else:
-                host = config.get("host", "127.0.0.1")
-                tcl_port = int(config.get("tcl_port", 6666))
-                telnet_port = int(config.get("telnet_port", 4444))
-                self.openocd.connect(
-                    host=host,
-                    port=tcl_port,
-                )
-                if hasattr(self.openocd, "start_log_monitor"):
-                    self.openocd.start_log_monitor(host=host, port=telnet_port)
-            if svd_path:
-                self.svd.load(svd_path)
-            if elf_path:
-                self.elf.load(elf_path)
-            version_raw = self.openocd.execute("version")
+            connected = False
+            try:
+                if config.get("auto_start", True):
+                    openocd_bin = config.get("openocd_bin") or resolve_openocd_binary() or "openocd"
+                    openocd_config = OpenOCDConfig(
+                        adapter=config["adapter"],
+                        target=config["target"],
+                        transport=config.get("transport", "swd"),
+                        tcl_port=int(config.get("tcl_port", 6666)),
+                        telnet_port=int(config.get("telnet_port", 4444)),
+                        openocd_bin=openocd_bin,
+                        extra_args=list(config.get("extra_args", [])),
+                        port_scan_limit=int(config.get("port_scan_limit", 20)),
+                    )
+                    self.openocd.start(openocd_config)
+                else:
+                    host = config.get("host", "127.0.0.1")
+                    tcl_port = int(config.get("tcl_port", 6666))
+                    telnet_port = int(config.get("telnet_port", 4444))
+                    self.openocd.connect(
+                        host=host,
+                        port=tcl_port,
+                    )
+                    if hasattr(self.openocd, "start_log_monitor"):
+                        self.openocd.start_log_monitor(host=host, port=telnet_port)
+                connected = True
+                if svd_path:
+                    self.svd.load(svd_path)
+                if elf_path:
+                    self.elf.load(elf_path)
+                version_raw = self.openocd.execute("version")
+            except Exception:
+                if connected:
+                    self.openocd.close()
+                raise
             self.session.update(debugger_connected=True, target_state="connected")
             return ok(
                 data={

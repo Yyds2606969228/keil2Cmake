@@ -16,6 +16,7 @@ class FakeOpenOCDClient:
         self.telnet_port = 4444
         self.log_monitor_started = False
         self.last_start_config = None
+        self.close_calls = 0
 
     def add_log_listener(self, callback) -> None:
         self.log_listener = callback
@@ -75,6 +76,7 @@ class FakeOpenOCDClient:
         return "program ok"
 
     def close(self) -> None:
+        self.close_calls += 1
         self.connected = False
 
     def clear_all_breakpoints(self, tracked_points=None):
@@ -377,3 +379,35 @@ def test_read_peripheral_fallback_returns_partial_data() -> None:
     out = service.read_peripheral("TIM1->CR1")
     assert out["status"] == "partial_success"
     assert out["data"]["raw_xml_snippet"] is not None
+
+
+def test_service_connect_debugger_closes_openocd_if_svd_load_fails(tmp_path: Path) -> None:
+    fake = FakeOpenOCDClient()
+    service = OpenOCDMCPService(openocd=fake, serial_mgr=SerialManager())
+    missing = tmp_path / "missing.svd"
+
+    out = service.connect_debugger(
+        {"adapter": "stlink", "target": "stm32f4x", "auto_start": True, "svd_path": str(missing)}
+    )
+
+    assert out["success"] is False
+    assert fake.close_calls == 1
+
+
+def test_service_connect_debugger_closes_existing_connection_if_elf_load_fails(tmp_path: Path) -> None:
+    fake = FakeOpenOCDClient()
+    service = OpenOCDMCPService(openocd=fake, serial_mgr=SerialManager())
+    missing = tmp_path / "missing.elf"
+
+    out = service.connect_debugger(
+        {
+            "auto_start": False,
+            "host": "127.0.0.1",
+            "tcl_port": 6666,
+            "telnet_port": 4444,
+            "elf_path": str(missing),
+        }
+    )
+
+    assert out["success"] is False
+    assert fake.close_calls == 1
