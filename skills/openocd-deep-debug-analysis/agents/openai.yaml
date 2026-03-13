@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenOCD Deep Debug Analysis"
+  short_description: "Use for ELF, SVD, RTOS, multicore, and memory-forensics root-cause analysis."
+  default_prompt: "Use this skill when evidence already exists and the task is to explain root cause through stack reconstruction, symbol mapping, peripheral register decoding, RTOS task-state analysis, multicore correlation, or stack and heap forensics. Keep every conclusion tied to raw addresses, values, and traceable reasoning, and always end with a minimal validation plan."

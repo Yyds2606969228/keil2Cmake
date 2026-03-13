@@ -1,0 +1,32 @@
+﻿{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": {{ cmake_min_version_major }},
+    "minor": {{ cmake_min_version_minor }},
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "keil2cmake",
+      "displayName": "Keil2Cmake armgcc ({{ generator }})",
+      "generator": "{{ generator }}",
+      "binaryDir": "${sourceDir}/build",
+{% if cmake_executable %}      "cmakeExecutable": "{{ cmake_executable }}",
+{% endif %}      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/internal/toolchain.cmake",
+        "K2C_CHECKCPP": "{{ checkcpp_path }}",
+        "K2C_OPENOCD_PATH": "{{ openocd_path }}",
+        "K2C_OPENOCD_TARGET": "{{ openocd_target }}",
+        "K2C_OPENOCD_INTERFACE": "{{ openocd_interface }}",
+        "K2C_OPENOCD_TRANSPORT": "{{ openocd_transport }}"{% if cmake_make_program %},{% endif %}
+{% if cmake_make_program %}        
+        "CMAKE_MAKE_PROGRAM": "{{ cmake_make_program }}"
+{% endif %}      }
+    }
+  ],
+  "buildPresets": [
+    {"name": "keil2cmake", "configurePreset": "keil2cmake"},
+    {"name": "build", "configurePreset": "keil2cmake"},
+    {"name": "check", "configurePreset": "keil2cmake", "targets": ["check"]}
+  ]
+}

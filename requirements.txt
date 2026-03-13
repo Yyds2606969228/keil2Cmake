@@ -1,2 +1,12 @@
-# requirements.txt
-pyinstaller>=4.5.1
+# Pinned dependencies for reproducible build/test
+pyinstaller==6.11.1
+jinja2==3.1.4
+onnx==1.18.0
+numpy==1.26.4
+onnxruntime==1.17.0
+pytest==8.0.0
+fastmcp==0.2.0
+pyserial==3.5
+pyelftools==0.31
+cmsis-svd==0.5
+pyusb==1.2.1

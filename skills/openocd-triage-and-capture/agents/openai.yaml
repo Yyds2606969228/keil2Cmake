@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenOCD Triage and Capture"
+  short_description: "Use for first-response fault triage, scene preservation, and dual-channel evidence capture."
+  default_prompt: "Use this skill when the symptom is fresh and the first priority is preserving evidence: halt safely, capture volatile CPU and fault-state data, align serial or RTT logs with OpenOCD state, and produce a structured triage report. Do not jump to final root cause; focus on freeze, collect, summarize, and hand off with explicit evidence and limits."

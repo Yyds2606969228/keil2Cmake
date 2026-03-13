@@ -72,3 +72,7 @@ Makefile
 *.bin
 *.map
 *.lst
+
+tinyML框架设计方案.md
+AGENTS.MD
+memory/

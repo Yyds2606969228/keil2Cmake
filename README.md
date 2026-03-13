@@ -2,193 +2,219 @@
 
 **中文** | [English](README_EN.md)
 
-Keil uVision 到 CMake 转换工具 (v3.0)，支持三大 ARM 工具链、CMake Presets、国际化输出。
+Keil uVision -> CMake 转换工具（ARM-GCC + CMake），并集成 OpenOCD 调试/下载配置与 TinyML（ONNX -> C）。
 
-## ✨ 功能特性
+## 功能概览
 
-- 🔄 **自动转换** Keil .uvprojx 到 CMake + CMakePresets.json
-- 🛠️ **三大工具链** ARMCC (C5) / ARMCLANG (C6) / ARM-GCC
-- 🌍 **国际化** 中英文双语 (`--lang zh/en`)
-- 🎯 **智能解析** 自动识别编译器类型和优化级别
-- 💡 **IDE 集成** 自动生成 `.clangd` 配置
-- 📁 **精简结构** 单一 toolchain + 单一用户配置文件
+1. `keil2cmake`：解析 `.uvprojx`，生成 ARM-GCC CMake 工程（含 `.clangd`、Presets、链接脚本转换）。
+2. `openocd`：快速生成/更新 `openocd.cfg` 与 VSCode 调试任务，支持 preset 覆盖。
+3. `tinyml`：ONNX 模型转 C 代码或静态库，面向 MCU 侧部署。
+4. `mcp-debug`：集成 `openocd-mcp` 组件，提供 OpenOCD TCL 调试、串口取证、SVD/ELF 解析与脚本化回归运行时。
 
-## 🚀 快速开始
+## 路径配置
 
-### 1. 配置编译器
+配置文件：`~/.config/keil2cmake/path.cfg`
+
+```ini
+[PATHS]
+ARMGCC_PATH = D:/Toolchains/arm-gcc/bin
+CMAKE_PATH = C:/Program Files/CMake/bin/cmake.exe
+NINJA_PATH = D:/Tools/ninja/ninja.exe
+CHECKCPP_PATH = D:/Tools/cppcheck/cppcheck.exe
+OPENOCD_PATH = D:/Tools/openocd/bin/openocd.exe
+
+[GENERAL]
+LANGUAGE = zh
+```
+
+## 快速开始
+
+### 1. 从 Keil 工程生成 CMake 工程
 
 ```bash
-Keil2Cmake -e ARMCC_PATH=D:/Keil_v5/ARM/ARMCC/bin/
-Keil2Cmake -e ARMCC_INCLUDE=D:/Keil_v5/ARM/ARMCC/include/
-Keil2Cmake --show-config  # 查看配置
+Keil2Cmake project.uvprojx -o ./cmake_project
 ```
 
-### 2. 转换项目
+### 2. 配置/构建/静态分析
 
 ```bash
-Keil2Cmake project.uvprojx           # 基本转换
-Keil2Cmake --lang en project.uvprojx # 英文输出
+cmake --preset keil2cmake
+cmake --build --preset build
+cmake --build --preset check
 ```
 
-### 3. 构建
+### 3. 为已有 CMake 工程生成 OpenOCD 调试配置
 
 ```bash
-cmake --preset keil2cmake            # 使用默认编译器
-cmake --build --preset keil2cmake
-
-# 或切换编译器
-cmake --preset keil2cmake-armclang
-cmake --preset keil2cmake-armgcc
+Keil2Cmake openocd -mcu STM32F103C8 -debugger jlink
 ```
 
-## 📋 命令参数
+如需覆盖更新现有配置：
 
 ```bash
-Keil2Cmake --help  # 查看完整帮助
+Keil2Cmake openocd -mcu <MCU> -debugger <daplink|jlink|stlink> --overwrite
 ```
 
-| 参数 | 说明 |
-|------|------|
-| `uvprojx` | Keil 项目文件 |
-| `-o DIR` | 输出目录（默认自动推导）|
-| `--compiler` | 覆盖编译器：armcc/armclang/armgcc |
-| `--optimize` | 覆盖优化：0/1/2/3/s |
-| `--lang` | 语言：zh/en |
-| `--clean` | 清理生成文件 |
-| `-e KEY=VAL` | 编辑配置 |
-| `--show-config` | 显示配置 |
+### 4. TinyML（ONNX -> C/静态库）
 
-**CMake 变量**：
-- `K2C_COMPILER` - 编译器选择
-- `K2C_OPTIMIZE_LEVEL` - 优化级别
-- `K2C_LINKER_SCRIPT_SCT` / `K2C_LINKER_SCRIPT_LD` - Linker 脚本覆盖
-
-查看 CMake 选项：
 ```bash
-cmake --build --preset keil2cmake --target show-options
+Keil2Cmake onnx --model model.onnx --weights flash --emit c
 ```
 
-## 📁 生成的文件
+### 5. 启动 MCP 调试运行时
 
+```bash
+Keil2Cmake mcp-debug
 ```
+
+该子命令会启动并入后的 `openocd-mcp` 调试运行时，供上层 Agent 或 MCP 客户端调用。组件文档见：
+
+- `docs/debug_runtime/README.md`
+- `docs/debug_runtime/api_contract.md`
+- `docs/debug_runtime/state_model.md`
+- `docs/debug_runtime/error_codes.md`
+
+## EXE 分发建议
+
+Windows 下建议采用 **双入口分发**：
+
+- `Keil2Cmake.exe`：主入口，负责工程生成、构建、OpenOCD 配置、TinyML 与全局方向编排
+- `openocd-mcp.exe`：服务入口，专门供 Claude / Codex / 其他 MCP client 以 `stdio` 方式拉起
+
+推荐关系：
+
+- `Keil2Cmake.exe` 仍然是主入口
+- `openocd-mcp.exe` 只承载调试、串口、取证、运行时自动化等 MCP 能力
+- 全局编排仍留在 `keil2cmake.orchestrator`，不会因为双入口分发而失效
+
+这样设计的原因是：
+
+- `stdio` MCP 更适合使用独立的 console 可执行文件承载
+- 普通工程转换/构建路径不需要被 MCP 运行时耦合
+- 调试运行时按需启动，不会默认常驻，也不会与主 CLI 路径争用固定端口
+
+严格一致性校验（默认开启，可显式开关）：
+
+```bash
+Keil2Cmake onnx --model model.onnx
+Keil2Cmake onnx --model model.onnx --no-strict-validation
+```
+
+生成 Opset12 覆盖矩阵：
+
+```bash
+uv run --with onnx python scripts/generate_opset12_coverage.py
+```
+
+输出：`docs/onnx_opset12_coverage_matrix.md`
+
+## 发布说明
+
+- 发布说明目录：`docs/releases/README.md`
+- 最新正式版本：`release/2.0.0`（2026-02-26）
+- 最新发布说明：`docs/releases/release-2.0/RELEASE_NOTES.md`
+- 升级指南：`docs/releases/release-2.0/UPGRADE_GUIDE.md`
+
+## OpenOCD 说明
+
+- 实际生效配置文件：`cmake/user/openocd.cfg`。
+- `openocd.cfg` 采用 `INTERFACE + TARGET + TRANSPORT` 组合配置，不使用 `BOARD`。
+- `cmake --preset keil2cmake` 支持覆盖：
+  - `K2C_OPENOCD_PATH`
+  - `K2C_OPENOCD_TARGET`
+  - `K2C_OPENOCD_INTERFACE`
+  - `K2C_OPENOCD_TRANSPORT`
+- `K2C_OPENOCD_TARGET` 与 `K2C_OPENOCD_INTERFACE` 会根据 Keil 工程自动给出默认值（可覆盖）。
+- `.vscode/launch.json` 和 `.vscode/tasks.json` 统一引用 `cmake/user/openocd.cfg`。
+
+## Debug Runtime（已并入 openocd-mcp 组件）
+
+当前仓库已并入 `openocd-mcp` 作为调试与软件侧闭环执行组件，主要提供：
+
+- OpenOCD TCL RPC 连接与目标控制
+- 串口环形缓冲与关键字触发
+- 外设、SVD、ELF 解析
+- Python 沙箱任务运行时
+- 面向 Agent 的 MCP 服务接口
+
+推荐定位是：
+
+- `keil2cmake`：工程生成、构建、配置、工件产出
+- `openocd-mcp`：连接、取证、分析、自动化验证
+
+当前仓库已提供面向 LLM / Agent 的全局方向编排层，用于管理：
+
+- 工程生成与 configure / build 路由
+- ELF / SVD / openocd.cfg 等工件登记
+- 调试准备与技能分流
+- triage / analysis / regression 的方向回流
+
+该编排能力当前定位为：
+
+- **由 Skill 驱动**：供 LLM / Agent 作为全局流程指导使用
+- **由 orchestrator 模块承载**：以 `Goal -> Signal -> DirectionDecision -> AgentWorkItem` 为核心抽象，不以 CLI 子命令作为主入口
+- **与双入口分发兼容**：主脑仍在 `Keil2Cmake.exe` / `keil2cmake.orchestrator`，`openocd-mcp.exe` 仅作为被 handoff 的调试服务入口
+
+建议优先阅读：
+
+- `docs/debug_runtime/orchestration.md`
+- `skills/software-loop-orchestrator/SKILL.md`
+
+## TinyML 说明
+
+- 后端生成链路：C 后端。
+- 量化策略：模型导出阶段完成；转换阶段依据 Q/DQ（`QuantizeLinear`/`DequantizeLinear`）与张量 dtype 自动匹配 `int8/int16` 路径；无 Q/DQ 时默认 `fp32`。
+- MCU 覆盖类型：`fp32/int8/int16`，内存布局按 4 字节对齐。
+- ONNX Opset12 覆盖：`162/162`（含约束子集，详见覆盖矩阵）。
+- `RNN/GRU/LSTM` 支持 `fp32/int8/int16`（限制项以覆盖矩阵为准）。
+- 转换阶段默认执行一致性校验（ONNX ReferenceEvaluator，默认 `rtol=1e-3`、`atol=1e-4`）。
+- 严格模式默认开启；若一致性校验被 `skipped` 也会直接失败（可通过 `--no-strict-validation` 放宽）。
+
+Windows 下如需执行“生成 C 后再比对”的一致性回归：
+
+```powershell
+$env:CC = "C:/path/to/arm-gcc/bin/gcc.exe"
+$env:PATH = "C:/path/to/arm-gcc/bin;$env:PATH"
+uv run --with jinja2 --with onnx --with numpy --with onnxruntime python -m unittest tests.test_tinyml -v
+```
+
+## 生成文件结构
+
+```text
 project_root/
-├── CMakeLists.txt           # 主构建文件
-├── CMakePresets.json        # 预设配置
-├── .clangd                  # IDE 代码提示
+├── CMakeLists.txt
+├── CMakePresets.json
+├── .clangd
 └── cmake/
-    ├── internal/            # ⚠️ 自动生成，勿编辑
+    ├── internal/
     │   ├── toolchain.cmake
-    │   ├── keil2cmake_default.sct
-    │   └── keil2cmake_default.ld
+    │   ├── keil2cmake_default.ld
+    │   └── keil2cmake_from_sct.ld
     └── user/
-        └── keil2cmake_user.cmake  # ✏️ 可编辑配置
+        ├── keil2cmake_user.cmake
+        ├── cppcheck.cmake
+        └── openocd.cfg
 ```
 
-**用户可编辑**：`cmake/user/keil2cmake_user.cmake`
-- 源文件/头文件/宏定义列表
-- 覆盖优化级别和 linker 脚本
+并生成 VSCode 调试文件：
 
-## ⚙️ 配置文件
-
-配置位置：`~/.keil2cmake/config.json`
-
-**可配置项**：
-- `ARMCC_PATH` / `ARMCLANG_PATH` / `ARMGCC_PATH` - 编译器路径
-- `ARMCC_INCLUDE` / `ARMCLANG_INCLUDE` - 系统头文件
-- `ARMGCC_SYSROOT` / `ARMGCC_INCLUDE` - GCC 配置
-- `LANGUAGE` - 默认语言（zh/en）
-- `MIN_VERSION` - 最低 CMake 版本
-
-## 🔧 优化级别
-
-Keil `<Optim>` 自动映射：
-
-| Keil | ARMCC | ARMCLANG | GCC |
-|------|-------|----------|-----|
-| 0 | -O0 | -O0 | -O0 |
-| 1 | -O1 | -O1 | -O1 |
-| 2 | -O2 | -O2 | -O2 |
-| 3 | -O3 | -O3 | -O3 |
-| 4 | -O1 | -O1 | -O1 |
-| 11 | -Ospace | -Oz | -Os |
-
-## ❓ 常见问题
-
-**找不到编译器**
-```bash
-Keil2Cmake -e ARMCC_PATH=D:/Keil_v5/ARM/ARMCC/bin/
+```text
+.vscode/launch.json
+.vscode/tasks.json
 ```
 
-**找不到头文件**
-```bash
-Keil2Cmake -e ARMCC_INCLUDE=D:/Keil_v5/ARM/ARMCC/include/
-```
+## 其他说明
 
-**Clangd 不工作**
-- 检查 `.clangd` 文件是否存在
-- 重启 VS Code（Ctrl+Shift+P → "Reload Window"）
-
-**查看详细输出**
-```bash
-cmake --preset keil2cmake --debug-output
-cmake --build build --verbose
-```
-
-## 📦 开发
-
-```bash
-# 克隆并安装
-git clone https://gitee.com/yyds6589/keil2cmake.git
-cd Keil2Cmake
-pip install -r requirements.txt
-
-# 运行测试
-python -m unittest discover -s tests -v
-
-# 构建可执行文件（推荐使用 spec 配置）
-pyinstaller Keil2Cmake.spec
-
-# 或使用命令行方式
-pyinstaller -F --name Keil2Cmake \
-  --exclude-module tkinter \
-  --hidden-import keil2cmake_cli \
-  --hidden-import keil2cmake_common \
-  --hidden-import i18n \
-  --collect-submodules keil \
-  --collect-submodules compiler \
-  Keil2Cmake.py
-
-# 生成的可执行文件：dist/Keil2Cmake.exe (Windows) 或 dist/Keil2Cmake (Linux/Mac)
-```
-
-## 📝 更新日志
-
-### v3.1 (2026-01)
-- 🐛 **修复 .clangd 配置问题**
-  - ✅ 添加 `CompilationDatabase` 路径配置，解决 compile_commands.json 未识别问题
-  - ✅ 添加 `-D__NO_EMBEDDED_ASM` 宏定义，解决 `__disable_irq` 等内置函数未声明问题
-  - ✅ 添加 `-fms-extensions` 选项，支持 `__declspec` 属性
-  - ✅ 将 `-D__CC_ARM` 移至 Remove 列表，避免 ARMCC 内联汇编解析错误
-  - ✅ 修正 `StandardLibrary: false`（原为错误的字符串值）
-  - ✅ 移除不支持的 `WorkspaceSymbol` 配置块
-- 🐛 **修复 Scatter File BOM 问题**
-  - ✅ 自动检测并移除链接脚本文件中的 BOM 字符（`\ufeff`）
-  - ✅ 避免 armlink 因 BOM 字符导致的链接失败
-  - ✅ 添加 BOM 清理提示信息
-
-### v3.0 (2026-01)
-- ✨ CMake Presets + 精简文件结构
-- ✨ 中英文国际化 + 智能编译器识别
-- ✨ 优化级别映射修复（ARMCC/ARMCLANG/GCC）
-- ✨ 内置帮助系统（`--help` + `show-options`）
-
-### v2.0
-- ✅ 动态配置 + clangd 支持
-
-### v1.0
-- 🎉 初始版本
+- `cmake --build --preset check` 使用 `CHECKCPP_PATH` 对应工具进行静态分析。
+- `.clangd` 已针对 ARM-GCC 做 sysroot/内部头文件处理。
+- `K2C_USE_NEWLIB_NANO=ON` 可启用 newlib-nano；浮点支持可开启：
+  - `K2C_NEWLIB_NANO_PRINTF_FLOAT=ON`
+  - `K2C_NEWLIB_NANO_SCANF_FLOAT=ON`
+- 兼容层会识别 Keil 的 ARMCC/ARMCLANG，并映射 MicroLIB 到 newlib-nano 默认开关（可覆盖）。
+- 若 Keil 工程含 `.sct`，会生成 `cmake/internal/keil2cmake_from_sct.ld` 作为默认 GCC 链接脚本（解析失败回退默认脚本）。
+- ARMASM 源文件需手动改写为 GCC 语法；可通过 `K2C_GCC_STARTUP` 指定 GCC 启动文件。
 
 ---
 
-⭐ **[GitHub](https://github.com/Yyds2606969228/keil2Cmake)**
-⭐ **[Gitee](https://gitee.com/yyds6589/keil2cmake)**
+**[GitHub](https://github.com/Yyds2606969228/keil2Cmake)**
+**[Gitee](https://gitee.com/yyds6589/keil2cmake)**

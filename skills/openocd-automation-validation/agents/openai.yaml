@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenOCD Automation Validation"
+  short_description: "Use for deterministic sandbox automation, regression runs, and machine-readable validation."
+  default_prompt: "Use this skill when the task should be repeated or measured: run sandbox Python workflows, enforce explicit assertions, capture failure samples automatically, and produce machine-readable pass/fail summaries with timeout boundaries. Favor deterministic control flow, bounded retries, cleanup on failure, and outputs that can be handed directly back to core, triage, or deep-analysis workflows."
