@@ -7,8 +7,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-raise unittest.SkipTest("tinyml 已抽离到 k2c_tinyml 子项目，主仓库不再运行该测试。")
-
 if importlib.util.find_spec('numpy') is None or importlib.util.find_spec('onnx') is None:
     raise unittest.SkipTest('tinyml optional dependencies numpy/onnx are missing')
 
@@ -22,11 +20,11 @@ SRC = ROOT / 'src'
 import sys
 sys.path.insert(0, str(SRC))
 
-from keil2cmake.tinyml.project import generate_tinyml_project as _generate_tinyml_project
-from keil2cmake.tinyml.converter import load_onnx_model
-from keil2cmake.tinyml.runtime import validate_model_consistency
-from keil2cmake.tinyml.runtime.c_runner import run_generated_c_model
-from keil2cmake.tinyml.runtime.validator import _eval_model
+from k2c_tinyml.project import generate_tinyml_project as _generate_tinyml_project
+from k2c_tinyml.converter import load_onnx_model
+from k2c_tinyml.runtime import validate_model_consistency
+from k2c_tinyml.runtime.c_runner import run_generated_c_model
+from k2c_tinyml.runtime.validator import _eval_model
 
 
 def generate_tinyml_project(*args, **kwargs):
@@ -3485,6 +3483,8 @@ class TestTinyMlProject(unittest.TestCase):
             str(result['header']),
             {'input': in_data},
         )
+        if (not c_run.ok) and ('host compiler not found' in (c_run.reason or '').lower()):
+            self.skipTest(c_run.reason)
         self.assertTrue(c_run.ok, msg=c_run.reason)
         assert c_run.outputs is not None
         c_out = c_run.outputs[model.outputs[0].name]

@@ -6,7 +6,7 @@ import json
 import os
 import re
 
-from ..template_engine import write_template
+from .template_engine import write_template
 from .backends import get_backend
 from .ir import ModelIR
 from .operators import EmitContext

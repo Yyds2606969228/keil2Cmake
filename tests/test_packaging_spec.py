@@ -10,15 +10,10 @@ SRC = ROOT / 'src'
 SPEC = ROOT / 'Keil2Cmake.spec'
 
 ALLOWED_EXTERNAL_IMPORTS = {
-    'fastmcp',
     'jinja2',
-    'numpy',
-    'onnx',
 }
 
 BLOCKED_HIDDENIMPORTS = {
-    'keil2cmake.tinyml.operators',
-    'keil2cmake.tinyml.onnx_loader',
 }
 
 
@@ -44,7 +39,7 @@ class TestPackagingSpecConsistency(unittest.TestCase):
         hiddenimports = _read_hiddenimports()
         missing = [
             name for name in hiddenimports
-            if (name.startswith('keil2cmake.') or name.startswith('openocd_mcp')) and not _module_exists(name)
+            if name.startswith('keil2cmake.') and not _module_exists(name)
         ]
         self.assertEqual(missing, [], f'missing internal hiddenimports: {missing}')
 
@@ -52,7 +47,7 @@ class TestPackagingSpecConsistency(unittest.TestCase):
         hiddenimports = _read_hiddenimports()
         unknown_external = [
             name for name in hiddenimports
-            if not name.startswith('keil2cmake.') and not name.startswith('openocd_mcp') and name not in ALLOWED_EXTERNAL_IMPORTS
+            if not name.startswith('keil2cmake.') and name.split('.')[0] not in ALLOWED_EXTERNAL_IMPORTS
         ]
         self.assertEqual(
             unknown_external,

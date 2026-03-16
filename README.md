@@ -2,14 +2,13 @@
 
 **中文** | [English](README_EN.md)
 
-Keil uVision -> CMake 转换工具（ARM-GCC + CMake），并集成 OpenOCD 调试/下载配置与 TinyML（ONNX -> C）。
+Keil uVision -> CMake 转换工具（ARM-GCC + CMake），并集成 OpenOCD 调试/下载配置。
 
 ## 功能概览
 
 1. `keil2cmake`：解析 `.uvprojx`，生成 ARM-GCC CMake 工程（含 `.clangd`、Presets、链接脚本转换）。
 2. `openocd`：快速生成/更新 `openocd.cfg` 与 VSCode 调试任务，支持 preset 覆盖。
-3. `tinyml`：ONNX 模型转 C 代码或静态库，面向 MCU 侧部署。
-4. `mcp-debug`：集成 `openocd-mcp` 组件，提供 OpenOCD TCL 调试、串口取证、SVD/ELF 解析与脚本化回归运行时。
+4. `sync-keil`：将 `cmake/user/keil2cmake_user.cmake` 的源文件/路径/宏/flags 同步回 `.uvprojx`。
 
 ## 路径配置
 
@@ -55,36 +54,30 @@ Keil2Cmake openocd -mcu STM32F103C8 -debugger jlink
 Keil2Cmake openocd -mcu <MCU> -debugger <daplink|jlink|stlink> --overwrite
 ```
 
-### 4. TinyML（ONNX -> C/静态库）
+### 4. 启动 MCP 调试运行时
 
 ```bash
-Keil2Cmake onnx --model model.onnx --weights flash --emit c
+Keil2Cmake sync-keil --uvprojx ./project.uvprojx --cmake-root ./cmake_project
 ```
 
-### 5. 启动 MCP 调试运行时
+该子命令会把 CMake 用户配置同步回 Keil 工程，并更新指定 `.uvprojx`（会生成 `.bak` 备份）。参考：
 
-```bash
-Keil2Cmake mcp-debug
-```
-
-该子命令会启动并入后的 `openocd-mcp` 调试运行时，供上层 Agent 或 MCP 客户端调用。组件文档见：
-
-- `docs/debug_runtime/README.md`
-- `docs/debug_runtime/api_contract.md`
-- `docs/debug_runtime/state_model.md`
-- `docs/debug_runtime/error_codes.md`
+- `src/openocd_mcp/docs/debug_runtime/README.md`
+- `src/openocd_mcp/docs/debug_runtime/api_contract.md`
+- `src/openocd_mcp/docs/debug_runtime/state_model.md`
+- `src/openocd_mcp/docs/debug_runtime/error_codes.md`
 
 ## EXE 分发建议
 
 Windows 下建议采用 **双入口分发**：
 
-- `Keil2Cmake.exe`：主入口，负责工程生成、构建、OpenOCD 配置、TinyML 与全局方向编排
-- `openocd-mcp.exe`：服务入口，专门供 Claude / Codex / 其他 MCP client 以 `stdio` 方式拉起
+- `Keil2Cmake.exe`：主入口，负责工程生成、构建、OpenOCD 配置与全局方向编排
+- `openocd-mcp.exe`：服务入口，位于独立子项目 `src/openocd_mcp/`
 
 推荐关系：
 
 - `Keil2Cmake.exe` 仍然是主入口
-- `openocd-mcp.exe` 只承载调试、串口、取证、运行时自动化等 MCP 能力
+- `openocd-mcp.exe` 只承载调试、串口、取证、运行时自动化等 MCP 能力（与 `keil2cmake` 解耦）
 - 全局编排仍留在 `keil2cmake.orchestrator`，不会因为双入口分发而失效
 
 这样设计的原因是：
@@ -93,20 +86,7 @@ Windows 下建议采用 **双入口分发**：
 - 普通工程转换/构建路径不需要被 MCP 运行时耦合
 - 调试运行时按需启动，不会默认常驻，也不会与主 CLI 路径争用固定端口
 
-严格一致性校验（默认开启，可显式开关）：
-
-```bash
-Keil2Cmake onnx --model model.onnx
-Keil2Cmake onnx --model model.onnx --no-strict-validation
-```
-
-生成 Opset12 覆盖矩阵：
-
-```bash
-uv run --with onnx python scripts/generate_opset12_coverage.py
-```
-
-输出：`docs/onnx_opset12_coverage_matrix.md`
+TinyML 已抽离到 `src/k2c_tinyml/` 子项目（独立 CLI/EXE），不再包含在 `Keil2Cmake` 中。
 
 ## 发布说明
 
@@ -127,9 +107,9 @@ uv run --with onnx python scripts/generate_opset12_coverage.py
 - `K2C_OPENOCD_TARGET` 与 `K2C_OPENOCD_INTERFACE` 会根据 Keil 工程自动给出默认值（可覆盖）。
 - `.vscode/launch.json` 和 `.vscode/tasks.json` 统一引用 `cmake/user/openocd.cfg`。
 
-## Debug Runtime（已并入 openocd-mcp 组件）
+## Debug Runtime（openocd_mcp 独立子项目）
 
-当前仓库已并入 `openocd-mcp` 作为调试与软件侧闭环执行组件，主要提供：
+`openocd-mcp` 已拆分为独立子项目，主要提供：
 
 - OpenOCD TCL RPC 连接与目标控制
 - 串口环形缓冲与关键字触发
@@ -153,30 +133,17 @@ uv run --with onnx python scripts/generate_opset12_coverage.py
 
 - **由 Skill 驱动**：供 LLM / Agent 作为全局流程指导使用
 - **由 orchestrator 模块承载**：以 `Goal -> Signal -> DirectionDecision -> AgentWorkItem` 为核心抽象，不以 CLI 子命令作为主入口
-- **与双入口分发兼容**：主脑仍在 `Keil2Cmake.exe` / `keil2cmake.orchestrator`，`openocd-mcp.exe` 仅作为被 handoff 的调试服务入口
+- **与双入口分发兼容**：`Keil2Cmake.exe` 聚焦工程转换，`openocd-mcp.exe` 由独立子项目提供
 
 建议优先阅读：
 
-- `docs/debug_runtime/orchestration.md`
-- `skills/software-loop-orchestrator/SKILL.md`
+- `src/openocd_mcp/docs/debug_runtime/orchestration.md`
+- `src/openocd_mcp/skills/software-loop-orchestrator/SKILL.md`
 
-## TinyML 说明
+## TinyML（已抽离）
 
-- 后端生成链路：C 后端。
-- 量化策略：模型导出阶段完成；转换阶段依据 Q/DQ（`QuantizeLinear`/`DequantizeLinear`）与张量 dtype 自动匹配 `int8/int16` 路径；无 Q/DQ 时默认 `fp32`。
-- MCU 覆盖类型：`fp32/int8/int16`，内存布局按 4 字节对齐。
-- ONNX Opset12 覆盖：`162/162`（含约束子集，详见覆盖矩阵）。
-- `RNN/GRU/LSTM` 支持 `fp32/int8/int16`（限制项以覆盖矩阵为准）。
-- 转换阶段默认执行一致性校验（ONNX ReferenceEvaluator，默认 `rtol=1e-3`、`atol=1e-4`）。
-- 严格模式默认开启；若一致性校验被 `skipped` 也会直接失败（可通过 `--no-strict-validation` 放宽）。
-
-Windows 下如需执行“生成 C 后再比对”的一致性回归：
-
-```powershell
-$env:CC = "C:/path/to/arm-gcc/bin/gcc.exe"
-$env:PATH = "C:/path/to/arm-gcc/bin;$env:PATH"
-uv run --with jinja2 --with onnx --with numpy --with onnxruntime python -m unittest tests.test_tinyml -v
-```
+TinyML 已抽离到 `src/k2c_tinyml/` 子项目（独立 CLI/EXE）。下方旧说明将逐步迁移到子项目文档。
+更多说明见：`src/k2c_tinyml/README.md` 与 `src/k2c_tinyml/tinyML框架设计方案.md`。
 
 ## 生成文件结构
 

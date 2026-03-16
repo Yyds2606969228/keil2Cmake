@@ -6,7 +6,6 @@ import os
 import subprocess
 from pathlib import Path
 
-from ..keil.config import get_armgcc_path
 from .codegen import generate_c_code, generate_manifest
 from .converter import load_onnx_model
 from .runtime import validate_model_consistency
@@ -39,6 +38,7 @@ def generate_tinyml_project(
     output_root: str,
     weights: str,
     emit: str,
+    toolchain_bin: str = "",
     strict_validation: bool = True,
 ) -> dict[str, object]:
     backend = "c"
@@ -76,9 +76,8 @@ def generate_tinyml_project(
 
     lib_path = ""
     if emit == "lib":
-        armgcc_path = get_armgcc_path()
-        gcc = _infer_tool(armgcc_path, "arm-none-eabi-gcc.exe" if os.name == "nt" else "arm-none-eabi-gcc")
-        ar = _infer_tool(armgcc_path, "arm-none-eabi-ar.exe" if os.name == "nt" else "arm-none-eabi-ar")
+        gcc = _infer_tool(toolchain_bin, "arm-none-eabi-gcc.exe" if os.name == "nt" else "arm-none-eabi-gcc")
+        ar = _infer_tool(toolchain_bin, "arm-none-eabi-ar.exe" if os.name == "nt" else "arm-none-eabi-ar")
         src = codegen_result["source"]
         obj = str(project_dir / f"{model_name}.o")
         lib_path = str(project_dir / f"lib{model_name}.a")

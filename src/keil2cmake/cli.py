@@ -6,6 +6,7 @@ import sys
 
 from .keil.config import get_language
 from .keil.uvprojx import parse_uvprojx
+from .keil.sync import sync_cmake_to_uvprojx
 from .keil.device import detect_cpu_architecture
 from .project_gen import generate_cmake_structure
 from .compiler.toolchains import generate_toolchains
@@ -57,39 +58,25 @@ def build_openocd_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_onnx_parser() -> argparse.ArgumentParser:
+def build_sync_keil_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description='Generate TinyML artifacts from ONNX models',
+        description='Sync CMake user config back to Keil .uvprojx',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''Examples:
-  %(prog)s --model model.onnx --weights flash --emit c
+  %(prog)s --uvprojx ./project.uvprojx --cmake-root ./cmake_project
+  %(prog)s --uvprojx ./project.uvprojx --prune
         '''
     )
-    parser.add_argument('--model', required=True, help='Path to ONNX model')
+    parser.add_argument('--uvprojx', required=True, help='Target .uvprojx path to update')
     parser.add_argument(
-        '--weights',
-        default='flash',
-        choices=['flash', 'ram'],
-        help='Weight storage location',
+        '--cmake-root',
+        default='.',
+        help='CMake project root containing cmake/user/keil2cmake_user.cmake',
     )
-    parser.add_argument(
-        '--emit',
-        default='c',
-        choices=['c', 'lib'],
-        help='Emit C source or static library',
-    )
-    parser.add_argument(
-        '--output',
-        default='./onnx-for-mcu',
-        help='Output root directory',
-    )
-    parser.add_argument(
-        '--no-strict-validation',
-        dest='strict_validation',
-        action='store_false',
-        help='Allow generation when consistency validation is skipped.',
-    )
-    parser.set_defaults(strict_validation=True)
+    parser.add_argument('--target', help='TargetName inside uvprojx (default: first target)')
+    parser.add_argument('--group', default='K2C_Sync', help='Keil group used for synchronized sources')
+    parser.add_argument('--prune', action='store_true', help='Prune stale files only inside sync group')
+    parser.add_argument('--dry-run', action='store_true', help='Preview changes without writing uvprojx')
     return parser
 
 
@@ -169,69 +156,37 @@ def _main_openocd(argv) -> int:
     return 0
 
 
-def _main_onnx(argv) -> int:
-    parser = build_onnx_parser()
+def _main_sync_keil(argv) -> int:
+    parser = build_sync_keil_parser()
     args = parser.parse_args(argv)
 
     set_language(get_language())
-    # Lazy import keeps non-TinyML commands/help free from heavy runtime deps.
-    from .tinyml import generate_tinyml_project
 
-    if not os.path.exists(args.model):
-        print(t('cli.error.file_not_found', path=args.model))
+    try:
+        result = sync_cmake_to_uvprojx(
+            uvprojx_path=args.uvprojx,
+            cmake_root=args.cmake_root,
+            target_name=args.target,
+            group_name=args.group,
+            prune=args.prune,
+            dry_run=args.dry_run,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        print(f'Error: {exc}')
         return 1
 
-    result = generate_tinyml_project(
-        args.model,
-        args.output,
-        args.weights,
-        args.emit,
-        strict_validation=args.strict_validation,
-    )
-
-    print('\n' + t('cli.onnx.done'))
-    print(f"  {t('cli.onnx.summary.model')}: {result['model_name']}")
-    print(f"  {t('cli.onnx.summary.output')}: {os.path.abspath(result['project_dir'])}")
-    print(f"  {t('cli.onnx.summary.backend')}: {result['backend']}")
-    print(f"  {t('cli.onnx.summary.weights')}: {result['weights']}")
-    print(f"  {t('cli.onnx.summary.emit')}: {args.emit}")
-    print(f"  {t('cli.onnx.summary.header')}: {result['header']}")
-    print(f"  {t('cli.onnx.summary.source')}: {result['source']}")
-    print(f"  {t('cli.onnx.summary.manifest')}: {result['manifest']}")
-    if result.get('library'):
-        print(f"  {t('cli.onnx.summary.library')}: {result['library']}")
-    validation = result.get("validation")
-    if validation is not None:
-        status_map = {
-            "passed": t("cli.onnx.validation.passed"),
-            "skipped": t("cli.onnx.validation.skipped"),
-            "failed": t("cli.onnx.validation.failed"),
-        }
-        status_label = status_map.get(getattr(validation, "status", ""), str(getattr(validation, "status", "")))
-        detail = getattr(validation, "reason", "") or ""
-        engine = getattr(validation, "engine", "") or ""
-        extras = []
-        if engine:
-            extras.append(engine)
-        if detail:
-            extras.append(detail)
-        if extras:
-            print(f"  {t('cli.onnx.summary.validation')}: {status_label} ({'; '.join(extras)})")
-        else:
-            print(f"  {t('cli.onnx.summary.validation')}: {status_label}")
-    return 0
-
-
-def _main_mcp_debug(argv) -> int:
-    if argv:
-        print('mcp-debug does not accept extra arguments.')
-        return 2
-
-    # Lazy import keeps the default conversion and TinyML paths independent
-    # from the optional debug runtime dependencies.
-    from openocd_mcp.server import main as mcp_main
-
-    mcp_main()
+    action = 'Dry run complete' if args.dry_run else 'Sync complete'
+    print('\n' + action)
+    print(f'  uvprojx: {result.uvprojx_path}')
+    print(f'  target: {result.target_name}')
+    print(f'  group: {result.group_name}')
+    print(f'  sources listed: {result.source_count}')
+    print(f'  files added: {result.added_count}')
+    print(f'  files removed: {result.removed_count}')
+    print(f'  include dirs: {result.include_count}')
+    print(f'  defines: {result.define_count}')
+    if not args.dry_run:
+        print(f'  backup: {result.backup_path}')
     return 0
 
 
@@ -240,8 +195,6 @@ def main(argv=None) -> int:
         argv = sys.argv[1:]
     if argv and argv[0] == 'openocd':
         return _main_openocd(argv[1:])
-    if argv and argv[0] == 'mcp-debug':
-        return _main_mcp_debug(argv[1:])
-    if argv and argv[0] == 'onnx':
-        return _main_onnx(argv[1:])
+    if argv and argv[0] == 'sync-keil':
+        return _main_sync_keil(argv[1:])
     return _main_convert(argv)

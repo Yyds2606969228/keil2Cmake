@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+raise unittest.SkipTest("tinyml 已抽离到 k2c_tinyml 子项目，主仓库不再运行该测试。")
+
 if importlib.util.find_spec('numpy') is None or importlib.util.find_spec('onnx') is None:
     raise unittest.SkipTest('tinyml optional dependencies numpy/onnx are missing')
 

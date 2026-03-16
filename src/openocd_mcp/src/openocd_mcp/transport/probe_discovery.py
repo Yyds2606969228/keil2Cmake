@@ -113,7 +113,12 @@ def _discover_from_pyusb() -> list[dict[str, Any]]:
     except ImportError:
         return []
     probes: list[dict[str, Any]] = []
-    for dev in usb.core.find(find_all=True):  # type: ignore[attr-defined]
+    try:
+        devices = usb.core.find(find_all=True)  # type: ignore[attr-defined]
+    except Exception:
+        # pyusb is installed but backend driver (libusb/winusb) is unavailable.
+        return []
+    for dev in devices:
         probe = _probe_from_vid_pid(
             int(dev.idVendor),
             int(dev.idProduct),
